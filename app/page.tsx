@@ -8,7 +8,9 @@ const peerId = typeof window === 'undefined' ? '' : sessionStorage.getItem('room
 if (typeof window !== 'undefined') sessionStorage.setItem('room-peer', peerId)
 
 type SignalType = 'offer' | 'answer' | 'ice'
-type SignalRow = { id: number; fromPeerId: string; signalType: SignalType; payload: RTCSessionDescriptionInit | RTCIceCandidateInit }
+type SignalRow =
+  | { id: number; fromPeerId: string; signalType: 'offer' | 'answer'; payload: RTCSessionDescriptionInit }
+  | { id: number; fromPeerId: string; signalType: 'ice'; payload: RTCIceCandidateInit }
 type Profile = { name: string; avatar: string }
 type SessionPayload = { roomId: string; isLive: boolean; host: { peerId: string; role: string; displayName: string } | null; peers: { peerId: string; role: string; displayName: string }[] }
 type SignalsPayload = { signals: SignalRow[] }
@@ -103,7 +105,7 @@ export default function Page() {
       const session = await api<SessionPayload>('/api/room/session')
       setViewers(session.peers || [])
       if (viewer && session.isLive && session.host && session.host.peerId !== peerId) await connectViewer(session.host.peerId)
-      const data = await api(`/api/room/signals?roomId=${roomId}&peerId=${peerId}&after=${cursor.current}`)
+      const data = await api<SignalsPayload>(`/api/room/signals?roomId=${roomId}&peerId=${peerId}&after=${cursor.current}`)
       for (const signal of (data.signals || []) as SignalRow[]) {
         cursor.current = Math.max(cursor.current, signal.id)
         if (signal.signalType === 'ice') {
