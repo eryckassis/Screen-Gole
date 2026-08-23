@@ -67,6 +67,22 @@ export default function Page() {
     for (const candidate of queued) await pc.addIceCandidate(candidate)
   }, [])
 
+  const attachStreamAndRenegotiate = useCallback(async (pc: RTCPeerConnection, targetId: string, stream: MediaStream, negotiate = true) => {
+    const currentTracks = new Set(stream.getTracks())
+    for (const sender of pc.getSenders()) {
+      if (sender.track && !currentTracks.has(sender.track)) await sender.replaceTrack(null)
+    }
+    const senders = new Set(pc.getSenders().map((sender) => sender.track).filter(Boolean))
+    for (const track of stream.getTracks()) {
+      if (!senders.has(track)) pc.addTrack(track, stream)
+    }
+    if (negotiate) {
+      const offer = await pc.createOffer()
+      await pc.setLocalDescription(offer)
+      await sendSignal(targetId, 'offer', offer)
+    }
+  }, [sendSignal])
+
   const connectViewer = useCallback(async (hostId: string) => {
     if (connections.current.has(hostId)) return
     const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] })
@@ -95,6 +111,16 @@ export default function Page() {
           if (!pc || !pc.remoteDescription) { const list = pendingIce.current.get(signal.fromPeerId) || []; list.push(signal.payload as RTCIceCandidateInit); pendingIce.current.set(signal.fromPeerId, list) } else await pc.addIceCandidate(signal.payload as RTCIceCandidateInit)
           continue
         }
+        if (viewer && signal.signalType === 'offer') {
+          const pc = connections.current.get(signal.fromPeerId)
+          if (pc) {
+            await pc.setRemoteDescription(signal.payload)
+            await applyPendingIce(signal.fromPeerId, pc)
+            const answer = await pc.createAnswer()
+            await pc.setLocalDescription(answer)
+            await sendSignal(signal.fromPeerId, 'answer', answer)
+          }
+        }
         if (viewer && signal.signalType === 'answer') {
           const pc = connections.current.get(signal.fromPeerId)
           if (pc && !pc.currentRemoteDescription) { await pc.setRemoteDescription(signal.payload); await applyPendingIce(signal.fromPeerId, pc) }
@@ -106,21 +132,40 @@ export default function Page() {
             connections.current.set(signal.fromPeerId, pc)
             pc.onicecandidate = (event) => { if (event.candidate) void sendSignal(signal.fromPeerId, 'ice', event.candidate.toJSON()) }
           }
-          if (streamRef.current && pc.getSenders().length === 0) streamRef.current.getTracks().forEach((track) => pc!.addTrack(track, streamRef.current!))
           await pc.setRemoteDescription(signal.payload)
+          if (streamRef.current) await attachStreamAndRenegotiate(pc, signal.fromPeerId, streamRef.current, false)
           await applyPendingIce(signal.fromPeerId, pc)
           const answer = await pc.createAnswer(); await pc.setLocalDescription(answer)
           await sendSignal(signal.fromPeerId, 'answer', answer)
         }
       }
     } catch (error) { setStatus('Sinalização indisponível — tentando novamente') } finally { pollBusy.current = false }
-  }, [applyPendingIce, connectViewer, sendSignal, viewer])
+  }, [applyPendingIce, attachStreamAndRenegotiate, connectViewer, sendSignal, viewer])
 
   useEffect(() => { if (!joined) return; void loadAudioOutputs(); const handleDeviceChange = () => void loadAudioOutputs(); navigator.mediaDevices?.addEventListener('devicechange', handleDeviceChange); return () => navigator.mediaDevices?.removeEventListener('devicechange', handleDeviceChange) }, [joined])
 
   useEffect(() => { if (!joined) return; void api('/api/room/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role: viewer ? 'viewer' : 'host', peerId, displayName: profile.name || 'Espectador' }) }).catch((error) => { setStatus('Não foi possível entrar na sala') }); void poll(); const timer = window.setInterval(() => { void poll(); void api('/api/room/heartbeat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ peerId, role: viewer ? 'viewer' : 'host', live: sharing }) }).catch((error) => void error) }, 1800); return () => window.clearInterval(timer) }, [joined, poll, profile.name, sharing, viewer])
 
-  function startShare() { void navigator.mediaDevices.getDisplayMedia({ video: { width: { ideal: 1920, max: 1920 }, height: { ideal: 1080, max: 1080 }, frameRate: { ideal: 60, max: 60 } }, audio: true }).then((stream) => { streamRef.current = stream; if (localVideo.current) localVideo.current.srcObject = stream; const track = stream.getVideoTracks()[0]; const s = track.getSettings(); setQuality(`${s.width || 0}×${s.height || 0} · ${s.frameRate ? Math.round(s.frameRate) : '?'} FPS efetivo`); setSharing(true); setStatus('Ao vivo'); track.onended = stopShare }).catch(() => setStatus('Captura cancelada �� tente novamente')) }
+  async function startShare() {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { width: { ideal: 1920, max: 1920 }, height: { ideal: 1080, max: 1080 }, frameRate: { ideal: 60, max: 60 } },
+        audio: { channelCount: 2, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      })
+      streamRef.current = stream
+      if (localVideo.current) localVideo.current.srcObject = stream
+      const track = stream.getVideoTracks()[0]
+      const settings = track.getSettings()
+      setQuality(`${settings.width || 0}×${settings.height || 0} · ${settings.frameRate ? Math.round(settings.frameRate) : '?'} FPS efetivo`)
+      setSharing(true)
+      setStatus(stream.getAudioTracks().length ? 'Ao vivo · áudio ativo' : 'Ao vivo · áudio indisponível nesta captura')
+      for (const [targetId, pc] of connections.current) await attachStreamAndRenegotiate(pc, targetId, stream)
+      track.onended = stopShare
+      for (const audioTrack of stream.getAudioTracks()) audioTrack.onended = () => setStatus('Ao vivo · áudio encerrado pelo navegador')
+    } catch {
+      setStatus('Captura cancelada — tente novamente')
+    }
+  }
   function stopShare() { streamRef.current?.getTracks().forEach((track) => track.stop()); streamRef.current = null; if (localVideo.current) localVideo.current.srcObject = null; setSharing(false); setStatus('Transmissão encerrada') }
   async function setVideoQuality(preset: '1080p' | '720p' | '480p') {
     setQualityPreset(preset)
