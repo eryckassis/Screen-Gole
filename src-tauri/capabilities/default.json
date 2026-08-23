@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop-capability",
+  "description": "Permissões da janela principal do Screen Gole",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "deep-link:default"
+  ]
+}

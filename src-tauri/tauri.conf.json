@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Screen Gole",
+  "version": "0.1.0",
+  "identifier": "com.screengole.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm desktop:dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm desktop:build",
+    "frontendDist": "../desktop/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Screen Gole",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 640,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' https://screen-gole.vercel.app ws://localhost:1420; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "displayLanguageSelector": true,
+        "installerIcon": "icons/icon.ico"
+      }
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["neegy"]
+      }
+    }
+  }
+}

@@ -6,11 +6,16 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "desktop:dev": "vite --config desktop/vite.config.mts",
+    "desktop:build": "vite build --config desktop/vite.config.mts",
+    "tauri": "tauri",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-deep-link": "^2.4.9",
     "@vercel/analytics": "1.6.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -27,14 +32,17 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
+    "@tauri-apps/cli": "^2.11.4",
     "@types/node": "^24",
     "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.1.0",
     "drizzle-kit": "^0.31.10",
     "postcss": "^8.5",
     "tailwindcss": "^4.3.3",
-    "typescript": "5.7.3"
+    "typescript": "5.7.3",
+    "vite": "^8.2.2"
   },
   "pnpm": {
     "overrides": {
