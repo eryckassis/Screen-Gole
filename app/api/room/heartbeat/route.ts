@@ -7,8 +7,9 @@ export async function POST(request: Request) {
   try {
     const { peerId, role, live } = await request.json().catch(() => ({}))
     if (typeof peerId !== 'string') return roomJson(request, { error: 'peerId obrigatório' }, { status: 400 })
-    await db.update(roomPeers).set({ status: 'active', lastSeenAt: new Date() }).where(and(eq(roomPeers.peerId, peerId), eq(roomPeers.roomId, 'main')))
-    if (role === 'host') await db.update(roomSessions).set({ status: live ? 'live' : 'idle', updatedAt: new Date() }).where(eq(roomSessions.roomId, 'main'))
+    const now = new Date()
+    await db.update(roomPeers).set({ status: role === 'host' && live ? 'live' : 'active', lastSeenAt: now }).where(and(eq(roomPeers.peerId, peerId), eq(roomPeers.roomId, 'main')))
+    if (role === 'host') await db.update(roomSessions).set({ status: live ? 'live' : 'idle', updatedAt: now, expiresAt: new Date(now.getTime() + 86400000) }).where(eq(roomSessions.roomId, 'main'))
     await db.update(roomPeers).set({ status: 'offline' }).where(lt(roomPeers.lastSeenAt, new Date(Date.now() - 30000)))
     return roomJson(request, { ok: true })
   } catch (error) {

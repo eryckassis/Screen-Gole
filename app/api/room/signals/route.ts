@@ -1,4 +1,4 @@
-import { and, eq, gt } from 'drizzle-orm'
+import { and, asc, eq, gt } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { roomSignals } from '@/lib/db/schema'
 import { roomJson, roomOptions } from '@/lib/api/room-cors'
@@ -22,7 +22,7 @@ export async function GET(request: Request) {
     const peerId = url.searchParams.get('peerId')
     const after = Number(url.searchParams.get('after') || 0)
     if (!peerId) return roomJson(request, { error: 'peerId obrigatório' }, { status: 400 })
-    const rows = await db.select().from(roomSignals).where(and(eq(roomSignals.roomId, 'main'), eq(roomSignals.toPeerId, peerId), gt(roomSignals.id, after)))
+    const rows = await db.select().from(roomSignals).where(and(eq(roomSignals.roomId, 'main'), eq(roomSignals.toPeerId, peerId), gt(roomSignals.id, after))).orderBy(asc(roomSignals.id)).limit(200)
     return roomJson(request, { signals: rows })
   } catch (error) {
     console.error('[room] Signal lookup failed', error)

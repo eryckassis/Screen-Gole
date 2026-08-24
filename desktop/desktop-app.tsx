@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { MonitorUp, Radio, Users } from "lucide-react";
 import { RoomApp, type RoomMode } from "../components/room-app";
@@ -6,7 +7,7 @@ import { windowsNativeCapture } from "./native-capture";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "https://screen-gole.vercel.app";
-const DESKTOP_INVITE_URL = "neegy://watch?room=main";
+const DESKTOP_INVITE_URL = `${API_BASE_URL}/s/main`;
 
 function modeFromDeepLinks(urls: string[] | null): RoomMode | null {
   for (const value of urls || []) {
@@ -97,6 +98,9 @@ export function DesktopApp() {
       initialMode={mode}
       inviteUrl={DESKTOP_INVITE_URL}
       nativeCapture={windowsNativeCapture}
+      setNativeFullscreen={(fullscreen) =>
+        getCurrentWindow().setFullscreen(fullscreen)
+      }
     />
   );
 }

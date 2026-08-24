@@ -40,6 +40,17 @@ export const roomSignals = pgTable(
   (table) => [index('room_signals_polling_idx').on(table.roomId, table.toPeerId, table.id)],
 )
 
+export const roomChannels = pgTable('room_channels', {
+  roomId: text('room_id').primaryKey(),
+  slug: text('slug').notNull().unique(),
+  name: text('name').notNull().default('Mesa Principal'),
+  category: text('category').notNull().default('Transmissões'),
+  description: text('description').notNull().default('Canal principal da comunidade'),
+  avatar: text('avatar'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
 export const streamProfiles = pgTable('stream_profiles', {
   id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
   displayName: text('display_name').notNull(),
@@ -47,4 +58,4 @@ export const streamProfiles = pgTable('stream_profiles', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 })
 
-export const schema = { roomSessions, roomPeers, roomSignals, streamProfiles }
+export const schema = { roomSessions, roomPeers, roomSignals, roomChannels, streamProfiles }

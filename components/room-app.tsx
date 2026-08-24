@@ -1,13 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ThinkingOrb } from "thinking-orbs";
 import {
   AppWindow,
   Camera,
-  Check,
   CheckCircle2,
+  ChevronDown,
   Copy,
   Expand,
+  Hash,
+  ImagePlus,
   Monitor,
   MonitorUp,
   PanelsTopLeft,
@@ -17,7 +20,6 @@ import {
   Signal,
   Volume2,
   VolumeX,
-  Users,
   Wifi,
   X,
 } from "lucide-react";
@@ -44,6 +46,35 @@ type SignalRow =
       payload: RTCIceCandidateInit;
     };
 type Profile = { name: string; avatar: string };
+type ChannelProfile = {
+  roomId: string;
+  slug: string;
+  name: string;
+  category: string;
+  description: string;
+  avatar: string | null;
+};
+type ChannelPayload = { channel: ChannelProfile };
+const defaultChannel: ChannelProfile = {
+  roomId,
+  slug: "main",
+  name: "Mesa Principal",
+  category: "Transmissões",
+  description: "Canal principal da comunidade",
+  avatar: null,
+};
+const footerIconButtonClass =
+  "grid size-11 shrink-0 place-items-center rounded-md border border-transparent bg-[#323234] text-white transition-colors hover:bg-[#5a595c] hover:text-white focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-white";
+const footerSelectClass =
+  "min-h-11 w-[clamp(110px,10vw,160px)] cursor-pointer appearance-none rounded-md border border-transparent bg-[#323234] py-0 pr-9 pl-3 text-[13px] font-semibold text-white outline-none transition-colors hover:bg-[#5a595c] focus:border-transparent focus:ring-2 focus:ring-white/25";
+const footerQualityButtonClass =
+  "min-h-11 min-w-14 rounded-md border px-3 text-[13px] font-extrabold transition-colors focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-white";
+const footerShareButtonClass =
+  "flex min-h-11 min-w-[170px] shrink-0 items-center justify-center gap-2 rounded-md border border-transparent px-4 text-[13px] font-extrabold whitespace-nowrap transition-colors focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-white";
+const sourceTabButtonClass =
+  "inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1b1b]";
+const sourceCardButtonClass =
+  "flex w-full items-center gap-4 rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1b1b]";
 type SessionPayload = {
   roomId: string;
   isLive: boolean;
@@ -112,6 +143,7 @@ export type RoomAppProps = {
   initialMode?: RoomMode;
   inviteUrl?: string;
   nativeCapture?: NativeCaptureBridge;
+  setNativeFullscreen?: (fullscreen: boolean) => Promise<void>;
 };
 
 export function RoomApp({
@@ -119,6 +151,7 @@ export function RoomApp({
   initialMode,
   inviteUrl,
   nativeCapture,
+  setNativeFullscreen,
 }: RoomAppProps) {
   const normalizedApiBaseUrl = useMemo(
     () => apiBaseUrl.replace(/\/$/, ""),
@@ -135,9 +168,15 @@ export function RoomApp({
   const [joined, setJoined] = useState(!viewer);
   const [profile, setProfile] = useState<Profile>({ name: "", avatar: "" });
   const [draft, setDraft] = useState<Profile>(profile);
-  const [editing, setEditing] = useState(false);
+  const [channel, setChannel] = useState<ChannelProfile>(defaultChannel);
+  const [channelDraft, setChannelDraft] =
+    useState<ChannelProfile>(defaultChannel);
+  const [channelSettingsOpen, setChannelSettingsOpen] = useState(false);
+  const [channelSaving, setChannelSaving] = useState(false);
+  const [channelError, setChannelError] = useState("");
   const [sharing, setSharing] = useState(false);
-  const [sourcePickerOpen, setSourcePickerOpen] = useState(true);
+  const [roomLive, setRoomLive] = useState(false);
+  const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
   const [sourceKind, setSourceKind] = useState<"screen" | "window" | "tab">(
     "screen",
   );
@@ -162,14 +201,39 @@ export function RoomApp({
     { peerId: string; displayName: string }[]
   >([]);
   const [copied, setCopied] = useState(false);
+  const [mediaFullscreen, setMediaFullscreen] = useState(false);
   const localVideo = useRef<HTMLVideoElement>(null);
   const remoteVideo = useRef<HTMLVideoElement>(null);
+  const screenPreview = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const nativeAudioRef = useRef<NativeAudioSession | null>(null);
   const connections = useRef(new Map<string, RTCPeerConnection>());
   const pendingIce = useRef(new Map<string, RTCIceCandidateInit[]>());
   const cursor = useRef(0);
   const pollBusy = useRef(false);
+
+  useEffect(() => {
+    const syncBrowserFullscreen = () => {
+      if (!setNativeFullscreen)
+        setMediaFullscreen(
+          document.fullscreenElement === screenPreview.current,
+        );
+    };
+    document.addEventListener("fullscreenchange", syncBrowserFullscreen);
+    return () =>
+      document.removeEventListener("fullscreenchange", syncBrowserFullscreen);
+  }, [setNativeFullscreen]);
+
+  useEffect(() => {
+    if (!mediaFullscreen || !setNativeFullscreen) return;
+    const exitWithEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setMediaFullscreen(false);
+      void setNativeFullscreen(false);
+    };
+    window.addEventListener("keydown", exitWithEscape);
+    return () => window.removeEventListener("keydown", exitWithEscape);
+  }, [mediaFullscreen, setNativeFullscreen]);
 
   const sendSignal = useCallback(
     async (toPeerId: string, type: SignalType, payload: unknown) => {
@@ -192,7 +256,13 @@ export function RoomApp({
     async (id: string, pc: RTCPeerConnection) => {
       const queued = pendingIce.current.get(id) || [];
       pendingIce.current.delete(id);
-      for (const candidate of queued) await pc.addIceCandidate(candidate);
+      for (const candidate of queued) {
+        try {
+          await pc.addIceCandidate(candidate);
+        } catch {
+          // Uma reconexão pode deixar candidatos da conexão anterior na fila.
+        }
+      }
     },
     [],
   );
@@ -250,9 +320,29 @@ export function RoomApp({
         setStatus("Ao vivo");
       };
       pc.onconnectionstatechange = () => {
-        if (pc.connectionState === "failed")
-          setStatus("Conexão falhou — tentando novamente");
+        if (pc.connectionState === "connected") {
+          setStatus("Ao vivo");
+          return;
+        }
+        if (pc.connectionState === "failed") {
+          connections.current.delete(hostId);
+          pendingIce.current.delete(hostId);
+          pc.close();
+          setStatus("Conexão falhou — reconectando");
+          return;
+        }
+        if (pc.connectionState === "disconnected") {
+          setStatus("Conexão interrompida — reconectando");
+          window.setTimeout(() => {
+            if (pc.connectionState !== "disconnected") return;
+            connections.current.delete(hostId);
+            pendingIce.current.delete(hostId);
+            pc.close();
+          }, 2500);
+        }
       };
+      pc.onicecandidateerror = () =>
+        setStatus("Rede restrita detectada — tentando rota alternativa");
       const offer = await pc.createOffer({
         offerToReceiveVideo: true,
         offerToReceiveAudio: true,
@@ -273,6 +363,7 @@ export function RoomApp({
         "/api/room/session",
       );
       setViewers(session.peers || []);
+      setRoomLive(session.isLive);
       if (
         viewer &&
         session.isLive &&
@@ -292,8 +383,13 @@ export function RoomApp({
             const list = pendingIce.current.get(signal.fromPeerId) || [];
             list.push(signal.payload as RTCIceCandidateInit);
             pendingIce.current.set(signal.fromPeerId, list);
-          } else
-            await pc.addIceCandidate(signal.payload as RTCIceCandidateInit);
+          } else {
+            try {
+              await pc.addIceCandidate(signal.payload as RTCIceCandidateInit);
+            } catch {
+              // Ignora candidatos atrasados pertencentes a uma conexão anterior.
+            }
+          }
           continue;
         }
         if (viewer && signal.signalType === "offer") {
@@ -327,6 +423,16 @@ export function RoomApp({
                   "ice",
                   event.candidate.toJSON(),
                 );
+            };
+            pc.onconnectionstatechange = () => {
+              if (
+                pc &&
+                (pc.connectionState === "failed" ||
+                  pc.connectionState === "closed")
+              ) {
+                connections.current.delete(signal.fromPeerId);
+                pendingIce.current.delete(signal.fromPeerId);
+              }
             };
           }
           await pc.setRemoteDescription(signal.payload);
@@ -380,9 +486,35 @@ export function RoomApp({
     }
   }, [nativeCapture, sourceKind, viewer]);
 
+  const loadChannel = useCallback(async () => {
+    try {
+      const payload = await api<ChannelPayload>(
+        normalizedApiBaseUrl,
+        "/api/room/channel",
+      );
+      setChannel(payload.channel);
+      setChannelDraft(payload.channel);
+    } catch {
+      // A configuração padrão mantém a sala utilizável durante uma retomada do banco.
+    }
+  }, [normalizedApiBaseUrl]);
+
+  useEffect(() => {
+    void loadChannel();
+  }, [loadChannel]);
+
   useEffect(() => {
     if (sourcePickerOpen) void loadNativeSources();
   }, [loadNativeSources, sourcePickerOpen]);
+
+  useEffect(() => {
+    if (!sourcePickerOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSourcePickerOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [sourcePickerOpen]);
 
   useEffect(() => {
     if (!joined) return;
@@ -412,10 +544,8 @@ export function RoomApp({
     }).catch(() => {
       setStatus("Não foi possível entrar na sala");
     });
-    void poll();
-    const timer = window.setInterval(() => {
-      void poll();
-      void api(normalizedApiBaseUrl, "/api/room/heartbeat", {
+    const heartbeat = () =>
+      api(normalizedApiBaseUrl, "/api/room/heartbeat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -424,6 +554,11 @@ export function RoomApp({
           live: sharing,
         }),
       }).catch(() => undefined);
+    void heartbeat();
+    void poll();
+    const timer = window.setInterval(() => {
+      void poll();
+      void heartbeat();
     }, 1800);
     return () => window.clearInterval(timer);
   }, [joined, normalizedApiBaseUrl, poll, profile.name, sharing, viewer]);
@@ -551,10 +686,27 @@ export function RoomApp({
     }
     setQuality(`${preset} · 60 FPS preferido`);
   }
-  function toggleFullscreen() {
-    const target = document.querySelector(".screen-preview");
-    if (!document.fullscreenElement) void target?.requestFullscreen();
-    else void document.exitFullscreen();
+  async function toggleFullscreen() {
+    const nextFullscreen = !mediaFullscreen;
+
+    if (setNativeFullscreen) {
+      try {
+        await setNativeFullscreen(nextFullscreen);
+        setMediaFullscreen(nextFullscreen);
+        return;
+      } catch {
+        setStatus(
+          "Não foi possível alterar a janela — tentando modo compatível",
+        );
+      }
+    }
+
+    try {
+      if (nextFullscreen) await screenPreview.current?.requestFullscreen();
+      else if (document.fullscreenElement) await document.exitFullscreen();
+    } catch {
+      setStatus("Tela cheia não está disponível neste dispositivo");
+    }
   }
   function updatePlayback(video: HTMLVideoElement | null) {
     if (!video) return;
@@ -592,14 +744,57 @@ export function RoomApp({
   }
   async function copyInvite() {
     await navigator.clipboard?.writeText(
-      inviteUrl || `${window.location.origin}/?watch=1`,
+      inviteUrl || `${window.location.origin}/s/${channel.slug}`,
     );
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1400);
   }
-  function saveProfile() {
-    setProfile(draft);
-    setEditing(false);
+  async function saveChannel() {
+    setChannelSaving(true);
+    setChannelError("");
+    try {
+      const payload = await api<ChannelPayload>(
+        normalizedApiBaseUrl,
+        "/api/room/channel",
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            peerId,
+            name: channelDraft.name,
+            category: channelDraft.category,
+            description: channelDraft.description,
+            avatar: channelDraft.avatar,
+          }),
+        },
+      );
+      setChannel(payload.channel);
+      setChannelDraft(payload.channel);
+      setChannelSettingsOpen(false);
+    } catch (error) {
+      setChannelError(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível salvar o canal",
+      );
+    } finally {
+      setChannelSaving(false);
+    }
+  }
+  function uploadChannelAvatar(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (file.size > 700_000) {
+      setChannelError("Escolha uma imagem de até 700 KB");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () =>
+      setChannelDraft((current) => ({
+        ...current,
+        avatar: String(reader.result),
+      }));
+    reader.readAsDataURL(file);
   }
   function uploadAvatar(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -629,14 +824,22 @@ export function RoomApp({
     return (
       <main className="grid min-h-dvh place-items-center bg-background p-6 text-foreground">
         <section className="w-full max-w-md border border-border bg-card p-8">
+          <div className="welcome-channel-badge">
+            {channel.avatar ? (
+              <img src={channel.avatar} alt="" />
+            ) : (
+              <Radio size={22} />
+            )}
+          </div>
           <p className="font-mono text-xs uppercase tracking-[0.24em] text-muted-foreground">
-            sala fixa · acesso livre
+            {channel.category} · sala permanente
           </p>
           <h1 className="mt-5 text-4xl font-semibold tracking-tight">
-            Assistir à transmissão
+            {channel.name}
           </h1>
           <p className="mt-4 leading-7 text-muted-foreground">
-            Entre sem conta. Seu nome e imagem aparecem apenas para o host.
+            {channel.description}. Entre uma vez e salve esta sala nos
+            favoritos.
           </p>
           <ProfileEditor
             profile={draft}
@@ -644,7 +847,10 @@ export function RoomApp({
             uploadAvatar={uploadAvatar}
           />
           <button
-            onClick={() => setJoined(true)}
+            onClick={() => {
+              setProfile(draft);
+              setJoined(true);
+            }}
             className="mt-6 min-h-11 w-full bg-foreground px-4 py-3 font-semibold text-background"
           >
             Entrar para assistir
@@ -654,191 +860,251 @@ export function RoomApp({
     );
 
   return (
-    <main className="min-h-dvh bg-background text-foreground">
+    <main className="persistent-room-shell flex min-h-dvh flex-col bg-background text-foreground">
       {!viewer && sourcePickerOpen && !sharing && (
         <div
-          className="source-picker-backdrop"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="source-picker-title"
+          className="fixed inset-0 z-[70] grid place-items-center overflow-y-auto bg-[#0b0b0b]/90 p-4 backdrop-blur-md sm:p-6"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget)
+              setSourcePickerOpen(false);
+          }}
         >
-          <section className="source-picker">
-            <div className="source-picker-head">
-              <div>
-                <p className="source-kicker">Neegy Studio · Captura desktop</p>
-                <h2 id="source-picker-title">Escolha o que transmitir</h2>
-                <p>
+          <section
+            className="my-auto w-full max-w-[680px] overflow-hidden rounded-2xl border border-white/10 bg-[#0b0b0b] shadow-[0_32px_100px_#000c]"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="source-picker-title"
+            aria-describedby="source-picker-description"
+          >
+            <header className="flex items-start justify-between gap-6 border-b border-white/8 px-5 py-6 sm:px-8 sm:py-7">
+              <div className="min-w-0">
+                <p className="font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-[#c8c9ff]">
+                  ODYSSEY · Captura desktop
+                </p>
+                <h2
+                  id="source-picker-title"
+                  className="mt-3 text-2xl font-bold tracking-[-0.03em] text-white sm:text-[28px]"
+                >
+                  Escolha o que transmitir
+                </h2>
+                <p
+                  id="source-picker-description"
+                  className="mt-2 max-w-[540px] text-sm leading-6 text-[#aaa8af] sm:text-[15px]"
+                >
                   {nativeCapture
                     ? `Fontes reais detectadas no ${nativeCapture.platformLabel}.`
                     : "Selecione uma fonte e ative o áudio no próximo passo."}
                 </p>
               </div>
               <button
-                className="modal-close"
+                type="button"
+                className="grid size-11 shrink-0 place-items-center rounded-lg border border-white/10 bg-[#0b0b0b] text-[#b9b7bd] transition-colors hover:border-white/20 hover:bg-[#29292b] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
                 onClick={() => setSourcePickerOpen(false)}
-                aria-label="Fechar"
+                aria-label="Fechar seletor de fonte"
               >
-                <X size={18} />
+                <X size={20} />
               </button>
-            </div>
-            <label className="source-search">
-              <Search size={16} />
-              <input
-                value={sourceSearch}
-                onChange={(event) => setSourceSearch(event.target.value)}
-                placeholder="Buscar janela ou aplicativo"
-                aria-label="Buscar fonte"
-              />
-            </label>
-            <div className="source-tabs" role="tablist">
-              {(
-                [
-                  ["screen", Monitor, "Telas"],
-                  ["window", AppWindow, "Janelas"],
-                  ["tab", PanelsTopLeft, "Abas"],
-                ] as const
-              ).map(([kind, Icon, label]) => (
-                <button
-                  key={kind}
-                  role="tab"
-                  aria-selected={sourceKind === kind}
-                  className={sourceKind === kind ? "active" : ""}
-                  onClick={() => {
-                    setSourceKind(kind);
-                    setSelectedSourceId(
-                      nativeSources.find((source) => source.kind === kind)
-                        ?.id || null,
-                    );
-                  }}
-                >
-                  <Icon size={17} />
-                  {label}
-                </button>
-              ))}
-            </div>
-            <div className="source-list">
-              {sourcesLoading && (
-                <p className="source-empty">Lendo fontes do Windows…</p>
-              )}
-              {sourceError && <p className="source-error">{sourceError}</p>}
-              {nativeCapture &&
-                sourceKind !== "tab" &&
-                !sourcesLoading &&
-                visibleNativeSources.map((source) => (
+            </header>
+
+            <div className="space-y-6 px-5 py-6 sm:px-8 sm:py-7">
+              <label className="flex min-h-12 items-center gap-3 rounded-xl border border-white/12 bg-[#0b0b0b] px-4 text-[#8f8d94] transition-colors focus-within:border-white/35 focus-within:ring-2 focus-within:ring-white/10">
+                <Search className="shrink-0" size={18} />
+                <input
+                  autoFocus
+                  className="min-w-0 flex-1 bg-transparent py-3 text-sm text-white outline-none placeholder:text-[#74727a]"
+                  value={sourceSearch}
+                  onChange={(event) => setSourceSearch(event.target.value)}
+                  placeholder="Buscar janela ou aplicativo"
+                  aria-label="Buscar fonte"
+                />
+              </label>
+
+              <div
+                className="flex flex-wrap gap-2 border-b border-white/8 pb-4"
+                role="tablist"
+                aria-label="Tipo de fonte"
+              >
+                {(
+                  [
+                    ["screen", Monitor, "Telas"],
+                    ["window", AppWindow, "Janelas"],
+                    ["tab", PanelsTopLeft, "Abas"],
+                  ] as const
+                ).map(([kind, Icon, label]) => (
                   <button
-                    key={source.id}
-                    className={`source-card ${selectedSourceId === source.id ? "selected" : ""}`}
-                    onClick={() => setSelectedSourceId(source.id)}
+                    type="button"
+                    key={kind}
+                    role="tab"
+                    aria-selected={sourceKind === kind}
+                    className={`${sourceTabButtonClass} ${sourceKind === kind ? "bg-[#353537] text-white" : "bg-transparent text-[#aaa8af] hover:bg-[#29292b] hover:text-white"}`}
+                    onClick={() => {
+                      setSourceKind(kind);
+                      setSelectedSourceId(
+                        nativeSources.find((source) => source.kind === kind)
+                          ?.id || null,
+                      );
+                    }}
                   >
-                    <span className="source-thumb">
-                      {source.kind === "screen" ? (
-                        <Monitor size={22} />
-                      ) : (
-                        <AppWindow size={22} />
-                      )}
-                    </span>
-                    <span>
-                      <strong>{source.name}</strong>
-                      <small>
-                        {source.processName ? `${source.processName} · ` : ""}
-                        {source.width}×{source.height}
-                        {source.audioCapable ? " · áudio isolado" : ""}
-                      </small>
-                    </span>
-                    {selectedSourceId === source.id && (
-                      <CheckCircle2 className="source-check" size={19} />
-                    )}
+                    <Icon size={18} />
+                    {label}
                   </button>
                 ))}
-              {nativeCapture &&
-                sourceKind !== "tab" &&
-                !sourcesLoading &&
-                !visibleNativeSources.length &&
-                !sourceError && (
-                  <p className="source-empty">
-                    Nenhuma fonte correspondente foi encontrada.
+              </div>
+
+              <div className="max-h-[min(34dvh,320px)] space-y-3 overflow-y-auto pr-1">
+                {sourcesLoading && (
+                  <p className="rounded-xl border border-dashed border-white/15 bg-[#0b0b0b] p-5 text-center text-sm text-[#aaa8af]">
+                    Lendo fontes do Windows…
                   </p>
                 )}
-              {(!nativeCapture || sourceKind === "tab") && (
-                <button
-                  className="source-card selected"
-                  onClick={() => setSelectedSourceId(null)}
-                >
-                  <span className="source-thumb">
-                    <MonitorUp size={22} />
-                  </span>
-                  <span>
-                    <strong>
-                      {sourceKind === "screen"
-                        ? "Sua tela inteira"
-                        : sourceKind === "window"
-                          ? "Uma janela do aplicativo"
-                          : "Uma aba do navegador"}
-                    </strong>
-                    <small>
-                      {sourceKind === "tab" && nativeCapture
-                        ? "A aba será escolhida no seletor seguro do WebView2"
-                        : "Captura de vídeo em alta qualidade"}
-                    </small>
-                  </span>
-                  <CheckCircle2 className="source-check" size={19} />
-                </button>
-              )}
+                {sourceError && (
+                  <p
+                    className="rounded-xl border border-[#8a444b] bg-[#2a1518] p-4 text-sm leading-6 text-[#ffadb3]"
+                    role="alert"
+                  >
+                    {sourceError}
+                  </p>
+                )}
+                {nativeCapture &&
+                  sourceKind !== "tab" &&
+                  !sourcesLoading &&
+                  visibleNativeSources.map((source) => (
+                    <button
+                      type="button"
+                      key={source.id}
+                      className={`${sourceCardButtonClass} ${selectedSourceId === source.id ? "border-white/35 bg-[#29292b]" : "border-white/10 bg-[#0b0b0b] hover:border-white/20 hover:bg-[#121212]"}`}
+                      onClick={() => setSelectedSourceId(source.id)}
+                    >
+                      <span className="grid size-12 shrink-0 place-items-center rounded-lg border border-white/8 bg-[#1b1b1b] text-white">
+                        {source.kind === "screen" ? (
+                          <Monitor size={22} />
+                        ) : (
+                          <AppWindow size={22} />
+                        )}
+                      </span>
+                      <span className="flex min-w-0 flex-1 flex-col gap-1">
+                        <strong className="truncate text-sm font-bold text-white">
+                          {source.name}
+                        </strong>
+                        <small className="truncate text-xs leading-5 text-[#97959d]">
+                          {source.processName ? `${source.processName} · ` : ""}
+                          {source.width}×{source.height}
+                          {source.audioCapable ? " · áudio isolado" : ""}
+                        </small>
+                      </span>
+                      {selectedSourceId === source.id && (
+                        <CheckCircle2
+                          className="shrink-0 text-[#6ee7a0]"
+                          size={20}
+                        />
+                      )}
+                    </button>
+                  ))}
+                {nativeCapture &&
+                  sourceKind !== "tab" &&
+                  !sourcesLoading &&
+                  !visibleNativeSources.length &&
+                  !sourceError && (
+                    <p className="rounded-xl border border-dashed border-white/15 bg-[#0b0b0b] p-5 text-center text-sm text-[#aaa8af]">
+                      Nenhuma fonte correspondente foi encontrada.
+                    </p>
+                  )}
+                {(!nativeCapture || sourceKind === "tab") && (
+                  <button
+                    type="button"
+                    className={`${sourceCardButtonClass} border-[#1b1b1b] bg-[#0b0b0b]`}
+                    onClick={() => setSelectedSourceId(null)}
+                  >
+                    <span className="grid size-12 shrink-0 place-items-center rounded-lg border border-transparent bg-[#0b0b0b] text-white">
+                      <MonitorUp size={22} />
+                    </span>
+                    <span className="flex min-w-0 flex-1 flex-col gap-1">
+                      <strong className="truncate text-sm font-bold text-white">
+                        {sourceKind === "screen"
+                          ? "Sua tela inteira"
+                          : sourceKind === "window"
+                            ? "Uma janela do aplicativo"
+                            : "Uma aba do navegador"}
+                      </strong>
+                      <small className="truncate text-xs leading-5 text-[#aaa8af]">
+                        {sourceKind === "tab" && nativeCapture
+                          ? "A aba será escolhida no seletor seguro do WebView2"
+                          : "Captura de vídeo em alta qualidade"}
+                      </small>
+                    </span>
+                    <CheckCircle2
+                      className="shrink-0 text-[#6ee7a0]"
+                      size={20}
+                    />
+                  </button>
+                )}
+              </div>
+
+              <aside className="flex gap-3 rounded-xl border border-white/10 bg-[#0b0b0b] p-4 sm:p-5">
+                <Volume2 className="mt-0.5 shrink-0 text-white" size={20} />
+                <div className="min-w-0">
+                  <strong className="block text-sm font-bold text-white">
+                    {sourceKind === "window" && nativeCapture
+                      ? "Áudio isolado por aplicativo"
+                      : "Áudio obrigatório"}
+                  </strong>
+                  <p className="mt-1.5 text-xs leading-5 text-[#aaa8af]">
+                    {sourceKind === "window" && nativeCapture
+                      ? "O Windows 11 captura somente o processo escolhido e não recaptura o Screen Gole."
+                      : "No seletor do Windows, habilite o compartilhamento de áudio; sem uma faixa audível a transmissão não começa."}
+                  </p>
+                </div>
+              </aside>
+
+              <button
+                type="button"
+                className="flex min-h-12 w-full items-center justify-center rounded-xl bg-white px-5 text-sm  text-[#0b0b0b] transition-colors hover:bg-[#dedede] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1b1b] disabled:pointer-events-none disabled:opacity-40"
+                disabled={
+                  sourcesLoading ||
+                  (nativeSelectionRequired && !selectedSourceId)
+                }
+                onClick={() => void startShare(sourceKind)}
+              >
+                Continuar com esta fonte
+              </button>
             </div>
-            <div className="source-audio-note">
-              <Volume2 size={17} />
-              <span>
-                <strong>
-                  {sourceKind === "window" && nativeCapture
-                    ? "Áudio isolado por aplicativo"
-                    : "Áudio obrigatório"}
-                </strong>
-                <small>
-                  {sourceKind === "window" && nativeCapture
-                    ? "O Windows 11 captura somente o processo escolhido e não recaptura o Screen Gole."
-                    : "No seletor do Windows, habilite o compartilhamento de áudio; sem uma faixa audível a transmissão não começa."}
-                </small>
-              </span>
-            </div>
-            <button
-              className="primary-action source-confirm"
-              disabled={
-                sourcesLoading || (nativeSelectionRequired && !selectedSourceId)
-              }
-              onClick={() => void startShare(sourceKind)}
-            >
-              Continuar com esta fonte
-            </button>
           </section>
         </div>
       )}
-      <header className="flex flex-wrap items-center justify-between gap-4 border-b border-border px-6 py-5">
-        <div className="flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center bg-foreground text-background">
-            <Radio size={21} />
+      <ChannelSidebar
+        channel={channel}
+        viewer={viewer}
+        sharing={viewer ? roomLive : sharing}
+        viewers={viewers}
+        copied={copied}
+        onCopyInvite={() => void copyInvite()}
+        onEdit={() => {
+          setChannelDraft(channel);
+          setChannelError("");
+          setChannelSettingsOpen(true);
+        }}
+      />
+      <header className="room-topbar">
+        <div className="room-brand">
+          <div className="grid size-15 shrink-0 place-items-center overflow-hidden rounded-md border border-white/10  ">
+            <img
+              src="/odyssey-helmet.png"
+              alt="Símbolo da Odyssey Studio"
+              className="h-full w-full object-contain"
+            />
           </div>
           <div>
             <p className="font-mono text-xs uppercase tracking-[0.22em] text-muted-foreground">
-              Neegy Studio
+              ODYSSEY Studio
             </p>
-            <h1 className="font-semibold">Sala principal</h1>
+            <h1 className="font-semibold">{channel.name}</h1>
           </div>
         </div>
-        <div className="flex items-center gap-3 text-sm text-muted-foreground">
-          <span className="flex items-center gap-2">
+        <div className="room-topbar-actions">
+          <span className="room-connection-status">
             <Wifi size={16} />
             {status}
           </span>
-          <button
-            onClick={() => {
-              setDraft(profile);
-              setEditing(true);
-            }}
-            className="flex min-h-11 items-center gap-2 border border-border px-4 hover:bg-muted"
-          >
-            <Settings2 size={16} />
-            Perfil
-          </button>
           <button
             onClick={copyInvite}
             className="flex min-h-11 items-center gap-2 border border-border px-4 hover:bg-muted"
@@ -848,208 +1114,423 @@ export function RoomApp({
           </button>
         </div>
       </header>
-      <div className="mx-auto flex max-w-7xl flex-col gap-6 p-6 lg:flex-row">
-        <section className="min-w-0 flex-1">
-          <div className="relative aspect-video overflow-hidden border border-border bg-card">
-            <video
-              ref={viewer ? remoteVideo : localVideo}
-              autoPlay
-              muted={viewer ? muted : true}
-              playsInline
-              className="h-full w-full object-contain"
-              aria-label={
-                viewer ? "Transmissão da tela do host" : "Prévia da sua tela"
-              }
-              onLoadedMetadata={(event) => updatePlayback(event.currentTarget)}
-            />
+      <div className="flex w-full flex-1 p-3 sm:p-4 lg:p-5">
+        <section className="flex min-w-0 w-full">
+          <div className="flex min-h-0 w-full flex-col rounded-lg bg-[#1b1b1b] p-2 pb-0 shadow-[0_24px_70px_#0005]">
             <div
-              className="media-toolbar"
-              role="group"
-              aria-label="Controles da transmissão"
+              ref={screenPreview}
+              className={`relative h-[calc(100dvh-188px)] min-h-[360px] w-full flex-1 overflow-hidden bg-[#0b0b0b] [&:fullscreen]:fixed [&:fullscreen]:inset-0 [&:fullscreen]:z-[100] [&:fullscreen]:h-dvh [&:fullscreen]:w-screen [&:fullscreen]:rounded-none [&:fullscreen]:border-0 [&:fullscreen]:bg-[#050506] ${mediaFullscreen ? "fixed inset-0 z-[100] h-dvh w-screen rounded-none border-0 bg-[#050506]" : "rounded-[7px]"}`}
             >
-              <button
-                type="button"
-                className="media-button"
-                onClick={() => {
-                  setMuted((value) => !value);
-                  if (remoteVideo.current) remoteVideo.current.muted = !muted;
-                }}
-                aria-label={muted ? "Ativar som" : "Mutar som"}
-                title={muted ? "Ativar som" : "Mutar som"}
-              >
-                {muted ? <VolumeX size={17} /> : <Volume2 size={17} />}
-              </button>
-              <label className="volume-control">
-                <span className="sr-only">Volume</span>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={volume}
-                  onChange={(event) => {
-                    const next = Number(event.target.value);
-                    setVolume(next);
-                    if (remoteVideo.current) remoteVideo.current.volume = next;
-                  }}
-                />
-              </label>
-              <button
-                type="button"
-                className="media-button"
-                onClick={toggleFullscreen}
-                aria-label="Tela cheia"
-                title="Tela cheia"
-              >
-                <Expand size={17} />
-              </button>
-              <label className="audio-output-control">
-                <span>Áudio</span>
-                <select
-                  aria-label="Saída de áudio"
-                  value={audioOutput}
-                  onChange={(event) =>
-                    void changeAudioOutput(event.target.value)
-                  }
+              <video
+                ref={viewer ? remoteVideo : localVideo}
+                autoPlay
+                muted={viewer ? muted : true}
+                playsInline
+                className="h-full w-full object-contain"
+                aria-label={
+                  viewer ? "Transmissão da tela do host" : "Prévia da sua tela"
+                }
+                onLoadedMetadata={(event) =>
+                  updatePlayback(event.currentTarget)
+                }
+              />
+              {!sharing && !viewer && (
+                <div className="absolute inset-0 grid place-items-center text-center">
+                  <div>
+                    <ThinkingOrb
+                      state="composing"
+                      size={64}
+                      theme="dark"
+                      className="mx-auto mb-4"
+                      aria-label="Pronto para transmitir"
+                    />
+                    <p className="font-mono text-sm uppercase tracking-widest text-muted-foreground">
+                      {status}
+                    </p>
+                  </div>
+                </div>
+              )}
+              {viewer && status !== "Ao vivo" && (
+                <div className="absolute inset-0 grid place-items-center bg-card text-center">
+                  <div>
+                    <Signal size={32} className="mx-auto mb-4" />
+                    <p className="font-mono text-sm uppercase tracking-widest text-muted-foreground">
+                      {status}
+                    </p>
+                  </div>
+                </div>
+              )}
+              {viewer && playbackBlocked && (
+                <div className="playback-consent">
+                  <Volume2 size={22} />
+                  <strong>Ativar o áudio da transmissão</strong>
+                  <small>
+                    O Windows/WebView2 precisa de um clique para liberar o som.
+                  </small>
+                  <button type="button" onClick={() => void enablePlayback()}>
+                    Ativar áudio
+                  </button>
+                </div>
+              )}
+              <div className="absolute left-4 top-4 flex items-center gap-2 bg-background/90 px-3 py-2 font-mono text-xs">
+                <Signal size={14} />
+                {quality}
+              </div>
+              {mediaFullscreen && (
+                <button
+                  type="button"
+                  className="absolute top-4 right-4 z-[110] flex min-h-10 items-center gap-2 rounded-md border border-[#5a5663] bg-[#111014e8] px-3 text-[11px] font-bold text-[#f4f3f6] backdrop-blur-md transition-colors hover:bg-[#29272f] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[#8e91ff]"
+                  onClick={() => void toggleFullscreen()}
+                  aria-label="Sair da tela cheia"
+                  title="Sair da tela cheia (Esc)"
                 >
-                  <option value="default">Padrão</option>
-                  {audioOutputs
-                    .filter((device) => device.deviceId !== "default")
-                    .map((device) => (
-                      <option key={device.deviceId} value={device.deviceId}>
-                        {device.label ||
-                          `Dispositivo ${device.deviceId.slice(0, 4)}`}
-                      </option>
-                    ))}
-                </select>
-              </label>
+                  <X size={20} />
+                  <span className="max-[480px]:hidden">Sair da tela cheia</span>
+                </button>
+              )}
+            </div>
+            <footer className="-mx-2 flex min-h-[76px] items-center rounded-b-lg bg-[#1b1b1b] px-4 py-2.5">
               <div
-                className="quality-controls"
+                className="flex w-full flex-wrap items-center gap-2.5"
                 role="group"
-                aria-label="Qualidade da transmissão"
+                aria-label="Controles da transmissão"
               >
-                <span>Qualidade</span>
-                {(["1080p", "720p", "480p"] as const).map((preset) => (
+                <button
+                  type="button"
+                  className={footerIconButtonClass}
+                  onClick={() => {
+                    setMuted((value) => !value);
+                    if (remoteVideo.current) remoteVideo.current.muted = !muted;
+                  }}
+                  aria-label={muted ? "Ativar som" : "Mutar som"}
+                  title={muted ? "Ativar som" : "Mutar som"}
+                >
+                  {muted ? <VolumeX size={17} /> : <Volume2 size={17} />}
+                </button>
+                <label className="flex w-[92px] items-center max-[1100px]:w-[70px] max-[560px]:w-[58px]">
+                  <span className="sr-only">Volume</span>
+                  <input
+                    className="w-full accent-[#f3f2f5]"
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={volume}
+                    onChange={(event) => {
+                      const next = Number(event.target.value);
+                      setVolume(next);
+                      if (remoteVideo.current)
+                        remoteVideo.current.volume = next;
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className={footerIconButtonClass}
+                  onClick={toggleFullscreen}
+                  aria-label="Tela cheia"
+                  title="Tela cheia"
+                >
+                  <Expand size={17} />
+                </button>
+                <label className="relative flex items-center gap-2 text-xs font-semibold text-[#dedce2] whitespace-nowrap">
+                  <span>Áudio</span>
+                  <select
+                    className={footerSelectClass}
+                    aria-label="Saída de áudio"
+                    value={audioOutput}
+                    onChange={(event) =>
+                      void changeAudioOutput(event.target.value)
+                    }
+                  >
+                    <option value="default">Padrão</option>
+                    {audioOutputs
+                      .filter((device) => device.deviceId !== "default")
+                      .map((device) => (
+                        <option key={device.deviceId} value={device.deviceId}>
+                          {device.label ||
+                            `Dispositivo ${device.deviceId.slice(0, 4)}`}
+                        </option>
+                      ))}
+                  </select>
+                  <ChevronDown
+                    aria-hidden="true"
+                    className="pointer-events-none absolute right-3 text-white"
+                    size={16}
+                    strokeWidth={2.5}
+                  />
+                </label>
+                {!viewer && (
                   <button
                     type="button"
-                    key={preset}
-                    className={`quality-button ${qualityPreset === preset ? "selected" : ""}`}
-                    onClick={() => void setVideoQuality(preset)}
+                    className={`${footerShareButtonClass} ml-auto ${sharing ? "border-[#d85d67] bg-[#52272c] text-[#ffb2b8] hover:bg-[#6a2d34] hover:text-white" : "bg-[#323234] text-white hover:bg-[#5a595c]"}`}
+                    onClick={() => {
+                      if (sharing) {
+                        stopShare();
+                        return;
+                      }
+                      setSourcePickerOpen(true);
+                    }}
+                    aria-label={
+                      sharing ? "Encerrar transmissão" : "Compartilhar tela"
+                    }
+                    title={
+                      sharing ? "Encerrar transmissão" : "Compartilhar tela"
+                    }
                   >
-                    {preset}
+                    <MonitorUp size={17} />
+                    <span>
+                      {sharing ? "Encerrar transmissão" : "Compartilhar tela"}
+                    </span>
                   </button>
-                ))}
-              </div>
-            </div>
-            {!sharing && !viewer && (
-              <div className="absolute inset-0 grid place-items-center text-center">
-                <div>
-                  <MonitorUp size={36} className="mx-auto mb-4" />
-                  <p className="font-mono text-sm uppercase tracking-widest text-muted-foreground">
-                    {status}
-                  </p>
+                )}
+                <div
+                  className={`flex items-center gap-1.5 text-xs font-semibold text-[#dedce2] ${viewer ? "ml-auto" : "ml-0"}`}
+                  role="group"
+                  aria-label="Qualidade da transmissão"
+                >
+                  <span>Qualidade</span>
+                  {(["1080p", "720p", "480p"] as const).map((preset) => (
+                    <button
+                      type="button"
+                      key={preset}
+                      className={`${footerQualityButtonClass} ${qualityPreset === preset ? "border-transparent bg-[#5a595c] text-white" : "border-transparent bg-[#323234] text-[#f3f2f5] hover:border-transparent hover:bg-[#5a595c] hover:text-white"}`}
+                      onClick={() => void setVideoQuality(preset)}
+                    >
+                      {preset}
+                    </button>
+                  ))}
                 </div>
               </div>
-            )}
-            {viewer && status !== "Ao vivo" && (
-              <div className="absolute inset-0 grid place-items-center bg-card text-center">
-                <div>
-                  <Signal size={32} className="mx-auto mb-4" />
-                  <p className="font-mono text-sm uppercase tracking-widest text-muted-foreground">
-                    {status}
-                  </p>
-                </div>
-              </div>
-            )}
-            {viewer && playbackBlocked && (
-              <div className="playback-consent">
-                <Volume2 size={22} />
-                <strong>Ativar o áudio da transmissão</strong>
-                <small>
-                  O Windows/WebView2 precisa de um clique para liberar o som.
-                </small>
-                <button type="button" onClick={() => void enablePlayback()}>
-                  Ativar áudio
-                </button>
-              </div>
-            )}
-            <div className="absolute left-4 top-4 flex items-center gap-2 bg-background/90 px-3 py-2 font-mono text-xs">
-              <Signal size={14} />
-              {quality}
-            </div>
-          </div>
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-4 border border-border bg-card p-4">
-            <div>
-              <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
-                {viewer ? "modo espectador" : "modo host"}
-              </p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {viewer
-                  ? "A conexão é estabelecida automaticamente."
-                  : "Compartilhe uma janela para iniciar."}
-              </p>
-            </div>
-            {!viewer && (
-              <button
-                onClick={() => {
-                  if (sharing) stopShare();
-                  else void startShare();
-                }}
-                className="min-h-11 bg-foreground px-5 py-3 font-semibold text-background"
-              >
-                {sharing ? "Encerrar transmissão" : "Compartilhar tela"}
-              </button>
-            )}
+            </footer>
           </div>
         </section>
-        <aside className="w-full border border-border bg-card p-5 lg:w-72">
-          <div className="flex items-center justify-between">
-            <h2 className="font-semibold">Pessoas na sala</h2>
-            <Users size={18} />
-          </div>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {viewers.length} espectador{viewers.length === 1 ? "" : "es"}
-          </p>
-          <div className="mt-5 space-y-3">
-            {viewers.map((item) => (
-              <div
-                key={item.peerId}
-                className="flex items-center gap-3 text-sm"
-              >
-                <div className="grid h-8 w-8 place-items-center rounded-full bg-muted font-medium">
-                  {item.displayName.slice(0, 1).toUpperCase()}
-                </div>
-                {item.displayName}
-              </div>
-            ))}
-          </div>
-        </aside>
       </div>
-      {editing && (
-        <div className="fixed inset-0 z-10 grid place-items-center bg-background/80 p-6">
-          <div className="w-full max-w-md border border-border bg-card p-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-semibold">Editar perfil</h2>
-              <button aria-label="Fechar" onClick={() => setEditing(false)}>
-                <X size={20} />
+      {channelSettingsOpen && !viewer && (
+        <div
+          className="channel-settings-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="channel-settings-title"
+        >
+          <form
+            className="channel-settings-card"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveChannel();
+            }}
+          >
+            <div className="channel-settings-header">
+              <div>
+                <p>Configuração permanente</p>
+                <h2 id="channel-settings-title">Personalizar canal</h2>
+              </div>
+              <button
+                type="button"
+                aria-label="Fechar"
+                onClick={() => setChannelSettingsOpen(false)}
+              >
+                <X size={19} />
               </button>
             </div>
-            <ProfileEditor
-              profile={draft}
-              setProfile={setDraft}
-              uploadAvatar={uploadAvatar}
-            />
-            <button
-              onClick={saveProfile}
-              className="mt-6 flex min-h-11 w-full items-center justify-center gap-2 bg-foreground px-4 py-3 font-semibold text-background"
-            >
-              <Check size={16} />
-              Salvar perfil
-            </button>
-          </div>
+            <div className="channel-avatar-editor">
+              <div className="channel-avatar-preview">
+                {channelDraft.avatar ? (
+                  <img
+                    src={channelDraft.avatar}
+                    alt="Prévia da foto do canal"
+                  />
+                ) : (
+                  <Radio size={28} />
+                )}
+              </div>
+              <div>
+                <label className="channel-upload-button">
+                  <ImagePlus size={16} />
+                  Trocar foto
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    onChange={uploadChannelAvatar}
+                  />
+                </label>
+                {channelDraft.avatar && (
+                  <button
+                    type="button"
+                    className="channel-remove-avatar"
+                    onClick={() =>
+                      setChannelDraft((current) => ({
+                        ...current,
+                        avatar: null,
+                      }))
+                    }
+                  >
+                    Remover foto
+                  </button>
+                )}
+                <small>PNG, JPEG ou WebP · até 700 KB</small>
+              </div>
+            </div>
+            <label>
+              Nome do canal
+              <input
+                value={channelDraft.name}
+                maxLength={40}
+                required
+                onChange={(event) =>
+                  setChannelDraft((current) => ({
+                    ...current,
+                    name: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label>
+              Categoria
+              <input
+                value={channelDraft.category}
+                maxLength={32}
+                required
+                onChange={(event) =>
+                  setChannelDraft((current) => ({
+                    ...current,
+                    category: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label>
+              Descrição
+              <textarea
+                value={channelDraft.description}
+                maxLength={100}
+                rows={3}
+                onChange={(event) =>
+                  setChannelDraft((current) => ({
+                    ...current,
+                    description: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            {channelError && (
+              <p className="channel-settings-error">{channelError}</p>
+            )}
+            <div className="channel-settings-actions">
+              <button
+                type="button"
+                onClick={() => setChannelSettingsOpen(false)}
+              >
+                Cancelar
+              </button>
+              <button type="submit" disabled={channelSaving}>
+                {channelSaving ? "Salvando…" : "Salvar canal"}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </main>
+  );
+}
+
+function ChannelSidebar({
+  channel,
+  viewer,
+  sharing,
+  viewers,
+  copied,
+  onCopyInvite,
+  onEdit,
+}: {
+  channel: ChannelProfile;
+  viewer: boolean;
+  sharing: boolean;
+  viewers: { peerId: string; displayName: string }[];
+  copied: boolean;
+  onCopyInvite: () => void;
+  onEdit: () => void;
+}) {
+  return (
+    <aside
+      className="persistent-channel-sidebar"
+      aria-label="Canais da comunidade"
+    >
+      <div className="channel-community-header">
+        <div className="channel-community-avatar size-17">
+          {channel.avatar ? (
+            <img src={channel.avatar} alt="" />
+          ) : (
+            <Radio size={18} />
+          )}
+        </div>
+        <span>
+          <strong>{channel.name}</strong>
+          <small>Sala permanente</small>
+        </span>
+        <ChevronDown size={16} />
+      </div>
+      <nav className="channel-navigation">
+        <p className="channel-category">Comunidade</p>
+        <button type="button" className="channel-text-row">
+          <Hash size={18} />
+          <span>lobby</span>
+        </button>
+        <div className="channel-category-row">
+          <p className="channel-category">{channel.category}</p>
+          {!viewer && (
+            <button type="button" onClick={onEdit} aria-label="Editar canal">
+              <Settings2 size={14} />
+            </button>
+          )}
+        </div>
+        <div className="channel-live-block">
+          <div className="channel-live-row">
+            <Volume2 size={18} />
+            <span>
+              <strong>{channel.name}</strong>
+              <small>{channel.description}</small>
+            </span>
+            <b className={sharing ? "is-live" : ""}>
+              {sharing ? "AO VIVO" : "OFF"}
+            </b>
+          </div>
+          {viewers.map((item) => (
+            <div className="channel-member" key={item.peerId}>
+              <span>{item.displayName.slice(0, 1).toUpperCase()}</span>
+              <p>{item.displayName}</p>
+              <Signal size={12} />
+            </div>
+          ))}
+          {!viewers.length && (
+            <p className="channel-empty-members">Aguardando espectadores</p>
+          )}
+        </div>
+        <p className="channel-category channel-future-label">Próximas salas</p>
+        <div className="channel-future-row">
+          <VolumeX size={17} />
+          <span>Mesa 02</span>
+          <small>em breve</small>
+        </div>
+        <div className="channel-future-row">
+          <VolumeX size={17} />
+          <span>Mesa 03</span>
+          <small>em breve</small>
+        </div>
+      </nav>
+      <div className="channel-sidebar-footer">
+        <button type="button" onClick={onCopyInvite}>
+          <Copy size={16} />
+          {copied ? "Link copiado" : "Copiar acesso permanente"}
+        </button>
+        {!viewer && (
+          <button type="button" onClick={onEdit}>
+            <Settings2 size={16} />
+            Personalizar canal
+          </button>
+        )}
+      </div>
+    </aside>
   );
 }
 
