@@ -1,0 +1,28 @@
+[package]
+name = "screen-gole"
+version = "0.2.0"
+description = "Screen Gole desktop client"
+authors = ["Screen Gole"]
+edition = "2021"
+
+[lib]
+name = "screen_gole_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-deep-link = "2"
+tauri-plugin-opener = "2"
+
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+
+[target.'cfg(windows)'.dependencies]
+wasapi = "0.24"
+windows-capture = "2.0.1"
+keyring = { version = "3.6.3", features = ["windows-native"] }

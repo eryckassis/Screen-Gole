@@ -12,6 +12,8 @@ __v0_jsx-dev-runtime.ts
 # Common ignores
 node_modules
 .next/
+desktop/dist/
+src-tauri/target/
 .DS_Store
 .vercel
 .env*
