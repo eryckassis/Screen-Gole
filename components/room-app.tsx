@@ -1,28 +1,32 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ThinkingOrb } from "thinking-orbs";
 import {
   AppWindow,
-  Camera,
   CheckCircle2,
-  ChevronDown,
-  Copy,
-  Expand,
-  Hash,
   ImagePlus,
   Monitor,
   MonitorUp,
   PanelsTopLeft,
   Radio,
   Search,
-  Settings2,
   Signal,
   Volume2,
-  VolumeX,
-  Wifi,
   X,
 } from "lucide-react";
+import {
+  BroadcastStage,
+  ChannelPanel,
+  CommunityRail,
+  ControlDock,
+  DialogCloseButton,
+  ParticipantStrip,
+  RoomDialog,
+  StreamSettingsDialog,
+  ViewerJoinDialog,
+  WorkspaceHeader,
+} from "./room/room-ui";
+import { FriendsDialog } from "./friends/friends-dialog";
 
 const roomId = "main";
 const peerId =
@@ -55,6 +59,20 @@ type ChannelProfile = {
   avatar: string | null;
 };
 type ChannelPayload = { channel: ChannelProfile };
+type RoomMember = {
+  userId: string;
+  displayName: string;
+  displayTag: string;
+  avatarUrl: string | null;
+  role: string;
+};
+type UserSuggestion = Omit<RoomMember, "role">;
+type RoomInvite = {
+  id: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  createdAt: string;
+};
 const defaultChannel: ChannelProfile = {
   roomId,
   slug: "main",
@@ -63,18 +81,10 @@ const defaultChannel: ChannelProfile = {
   description: "Canal principal da comunidade",
   avatar: null,
 };
-const footerIconButtonClass =
-  "grid size-11 shrink-0 place-items-center rounded-md border border-transparent bg-[#323234] text-white transition-colors hover:bg-[#5a595c] hover:text-white focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-white";
-const footerSelectClass =
-  "min-h-11 w-[clamp(110px,10vw,160px)] cursor-pointer appearance-none rounded-md border border-transparent bg-[#323234] py-0 pr-9 pl-3 text-[13px] font-semibold text-white outline-none transition-colors hover:bg-[#5a595c] focus:border-transparent focus:ring-2 focus:ring-white/25";
-const footerQualityButtonClass =
-  "min-h-11 min-w-14 rounded-md border px-3 text-[13px] font-extrabold transition-colors focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-white";
-const footerShareButtonClass =
-  "flex min-h-11 min-w-[170px] shrink-0 items-center justify-center gap-2 rounded-md border border-transparent px-4 text-[13px] font-extrabold whitespace-nowrap transition-colors focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-white";
 const sourceTabButtonClass =
-  "inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1b1b]";
+  "inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 const sourceCardButtonClass =
-  "flex w-full items-center gap-4 rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1b1b]";
+  "flex w-full items-center gap-4 rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 type SessionPayload = {
   roomId: string;
   isLive: boolean;
@@ -82,6 +92,7 @@ type SessionPayload = {
   peers: { peerId: string; role: string; displayName: string }[];
 };
 type SignalsPayload = { signals: SignalRow[] };
+type FriendsSummaryPayload = { incoming: unknown[] };
 
 async function readJson<T = unknown>(response: Response): Promise<T> {
   const text = await response.text();
@@ -98,8 +109,15 @@ async function api<T = unknown>(
   apiBaseUrl: string,
   path: string,
   init?: RequestInit,
+  accessToken?: string,
 ): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`, init);
+  const headers = new Headers(init?.headers);
+  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+  const response = await fetch(`${apiBaseUrl}${path}`, {
+    ...init,
+    headers,
+    credentials: accessToken ? "omit" : "same-origin",
+  });
   const payload = await readJson<T>(response);
   if (!response.ok) {
     const message =
@@ -115,6 +133,20 @@ async function api<T = unknown>(
 }
 
 export type RoomMode = "host" | "viewer";
+
+type QualityPreset = "2K" | "1080p" | "720p" | "480p";
+
+const VIDEO_QUALITY_PRESETS: Record<
+  QualityPreset,
+  { width: number; height: number; frameRate: number }
+> = {
+  "2K": { width: 2560, height: 1440, frameRate: 60 },
+  "1080p": { width: 1920, height: 1080, frameRate: 60 },
+  "720p": { width: 1280, height: 720, frameRate: 60 },
+  "480p": { width: 854, height: 480, frameRate: 60 },
+};
+
+const QUALITY_PRESETS = ["2K", "1080p", "720p", "480p"] as const;
 
 export type NativeCaptureSource = {
   id: string;
@@ -144,6 +176,9 @@ export type RoomAppProps = {
   inviteUrl?: string;
   nativeCapture?: NativeCaptureBridge;
   setNativeFullscreen?: (fullscreen: boolean) => Promise<void>;
+  accessToken?: string;
+  initialProfile?: { name: string; avatar: string };
+  initialTag?: string;
 };
 
 export function RoomApp({
@@ -152,6 +187,9 @@ export function RoomApp({
   inviteUrl,
   nativeCapture,
   setNativeFullscreen,
+  accessToken,
+  initialProfile,
+  initialTag = "",
 }: RoomAppProps) {
   const normalizedApiBaseUrl = useMemo(
     () => apiBaseUrl.replace(/\/$/, ""),
@@ -165,15 +203,34 @@ export function RoomApp({
         new URLSearchParams(window.location.search).has("watch")),
     [initialMode],
   );
-  const [joined, setJoined] = useState(!viewer);
-  const [profile, setProfile] = useState<Profile>({ name: "", avatar: "" });
+  const roomApi = useCallback(
+    <T,>(path: string, init?: RequestInit) =>
+      api<T>(normalizedApiBaseUrl, path, init, accessToken),
+    [accessToken, normalizedApiBaseUrl],
+  );
+  const [joined, setJoined] = useState(true);
+  const [viewerProfileOpen, setViewerProfileOpen] = useState(false);
+  const [profile, setProfile] = useState<Profile>(initialProfile || { name: "Usuário", avatar: "" });
   const [draft, setDraft] = useState<Profile>(profile);
+  const [profileSettingsOpen, setProfileSettingsOpen] = useState(false);
+  const [friendsOpen, setFriendsOpen] = useState(false);
+  const [incomingFriendRequests, setIncomingFriendRequests] = useState(0);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileError, setProfileError] = useState("");
+  const [displayTag, setDisplayTag] = useState(initialTag);
   const [channel, setChannel] = useState<ChannelProfile>(defaultChannel);
   const [channelDraft, setChannelDraft] =
     useState<ChannelProfile>(defaultChannel);
   const [channelSettingsOpen, setChannelSettingsOpen] = useState(false);
   const [channelSaving, setChannelSaving] = useState(false);
   const [channelError, setChannelError] = useState("");
+  const [members, setMembers] = useState<RoomMember[]>([]);
+  const [invites, setInvites] = useState<RoomInvite[]>([]);
+  const [memberTag, setMemberTag] = useState("");
+  const [userSuggestions, setUserSuggestions] = useState<UserSuggestion[]>([]);
+  const [userSearchLoading, setUserSearchLoading] = useState(false);
+  const [accessLoading, setAccessLoading] = useState(false);
+  const [accessError, setAccessError] = useState("");
   const [sharing, setSharing] = useState(false);
   const [roomLive, setRoomLive] = useState(false);
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
@@ -188,10 +245,11 @@ export function RoomApp({
   const [status, setStatus] = useState(
     viewer ? "Aguardando transmissão" : "Pronto para transmitir",
   );
-  const [quality, setQuality] = useState("1080p · 60 FPS solicitado");
-  const [qualityPreset, setQualityPreset] = useState<"1080p" | "720p" | "480p">(
-    "1080p",
-  );
+  const [quality, setQuality] = useState("2K · 2560×1440 solicitado");
+  const [qualityPreset, setQualityPreset] =
+    useState<QualityPreset>("2K");
+  const [streamSettingsOpen, setStreamSettingsOpen] = useState(false);
+  const [captureAudio, setCaptureAudio] = useState(true);
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(1);
   const [audioOutputs, setAudioOutputs] = useState<MediaDeviceInfo[]>([]);
@@ -225,6 +283,40 @@ export function RoomApp({
   }, [setNativeFullscreen]);
 
   useEffect(() => {
+    const openFriendsSearch = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLocaleLowerCase() !== "k") return;
+      event.preventDefault();
+      setFriendsOpen(true);
+    };
+    window.addEventListener("keydown", openFriendsSearch);
+    return () => window.removeEventListener("keydown", openFriendsSearch);
+  }, []);
+
+  useEffect(() => {
+    if (friendsOpen) return;
+
+    let active = true;
+    const refreshFriendRequests = async () => {
+      try {
+        const result = await roomApi<FriendsSummaryPayload>("/api/friends");
+        if (active) setIncomingFriendRequests(result.incoming.length);
+      } catch {
+        // A sala continua utilizável caso a rede de amigos esteja indisponível.
+      }
+    };
+
+    void refreshFriendRequests();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refreshFriendRequests();
+    }, 5000);
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [friendsOpen, roomApi]);
+
+  useEffect(() => {
     if (!mediaFullscreen || !setNativeFullscreen) return;
     const exitWithEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -237,7 +329,7 @@ export function RoomApp({
 
   const sendSignal = useCallback(
     async (toPeerId: string, type: SignalType, payload: unknown) => {
-      await api(normalizedApiBaseUrl, "/api/room/signals", {
+      await roomApi("/api/room/signals", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -249,7 +341,7 @@ export function RoomApp({
         }),
       });
     },
-    [normalizedApiBaseUrl],
+    [roomApi],
   );
 
   const applyPendingIce = useCallback(
@@ -358,12 +450,13 @@ export function RoomApp({
     if (pollBusy.current) return;
     pollBusy.current = true;
     try {
-      const session = await api<SessionPayload>(
-        normalizedApiBaseUrl,
+      const session = await roomApi<SessionPayload>(
         "/api/room/session",
       );
       setViewers(session.peers || []);
       setRoomLive(session.isLive);
+      if (viewer && !session.isLive && connections.current.size === 0)
+        setStatus("Aguardando transmissão");
       if (
         viewer &&
         session.isLive &&
@@ -371,8 +464,7 @@ export function RoomApp({
         session.host.peerId !== peerId
       )
         await connectViewer(session.host.peerId);
-      const data = await api<SignalsPayload>(
-        normalizedApiBaseUrl,
+      const data = await roomApi<SignalsPayload>(
         `/api/room/signals?roomId=${roomId}&peerId=${peerId}&after=${cursor.current}`,
       );
       for (const signal of (data.signals || []) as SignalRow[]) {
@@ -458,7 +550,7 @@ export function RoomApp({
     applyPendingIce,
     attachStreamAndRenegotiate,
     connectViewer,
-    normalizedApiBaseUrl,
+    roomApi,
     sendSignal,
     viewer,
   ]);
@@ -488,8 +580,7 @@ export function RoomApp({
 
   const loadChannel = useCallback(async () => {
     try {
-      const payload = await api<ChannelPayload>(
-        normalizedApiBaseUrl,
+      const payload = await roomApi<ChannelPayload>(
         "/api/room/channel",
       );
       setChannel(payload.channel);
@@ -497,11 +588,47 @@ export function RoomApp({
     } catch {
       // A configuração padrão mantém a sala utilizável durante uma retomada do banco.
     }
-  }, [normalizedApiBaseUrl]);
+  }, [roomApi]);
 
   useEffect(() => {
     void loadChannel();
   }, [loadChannel]);
+
+  useEffect(() => {
+    const query = memberTag.trim();
+    if (viewer || !channelSettingsOpen || query.length < 2) {
+      setUserSuggestions([]);
+      setUserSearchLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setUserSearchLoading(true);
+      try {
+        const payload = await roomApi<{
+          suggestions: UserSuggestion[];
+        }>(`/api/rooms/${roomId}/members?q=${encodeURIComponent(query)}`, {
+          signal: controller.signal,
+        });
+        setUserSuggestions(payload.suggestions || []);
+      } catch (error) {
+        if (!controller.signal.aborted)
+          setAccessError(
+            error instanceof Error
+              ? error.message
+              : "Não foi possível pesquisar usuários",
+          );
+      } finally {
+        if (!controller.signal.aborted) setUserSearchLoading(false);
+      }
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [channelSettingsOpen, memberTag, roomApi, viewer]);
 
   useEffect(() => {
     if (sourcePickerOpen) void loadNativeSources();
@@ -533,7 +660,7 @@ export function RoomApp({
 
   useEffect(() => {
     if (!joined) return;
-    void api(normalizedApiBaseUrl, "/api/room/session", {
+    void roomApi("/api/room/session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -545,7 +672,7 @@ export function RoomApp({
       setStatus("Não foi possível entrar na sala");
     });
     const heartbeat = () =>
-      api(normalizedApiBaseUrl, "/api/room/heartbeat", {
+      roomApi("/api/room/heartbeat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -561,7 +688,7 @@ export function RoomApp({
       void heartbeat();
     }, 1800);
     return () => window.clearInterval(timer);
-  }, [joined, normalizedApiBaseUrl, poll, profile.name, sharing, viewer]);
+  }, [joined, poll, profile.name, roomApi, sharing, viewer]);
 
   async function startShare(kind: "screen" | "window" | "tab" = sourceKind) {
     let displayStream: MediaStream | null = null;
@@ -571,7 +698,10 @@ export function RoomApp({
         (source) => source.id === selectedSourceId,
       );
       const useNativeProcessAudio = Boolean(
-        nativeCapture && kind === "window" && selectedSource?.processId,
+        captureAudio &&
+          nativeCapture &&
+          kind === "window" &&
+          selectedSource?.processId,
       );
       if (nativeCapture && kind === "window" && !selectedSource?.processId) {
         throw new Error(
@@ -582,24 +712,31 @@ export function RoomApp({
       setStatus("Aguardando seleção do Windows");
       const displaySurface =
         kind === "window" ? "window" : kind === "tab" ? "browser" : "monitor";
+      const requestedQuality = VIDEO_QUALITY_PRESETS[qualityPreset];
       displayStream = await navigator.mediaDevices.getDisplayMedia({
         video: {
           displaySurface,
-          width: { ideal: 1920, max: 3840 },
-          height: { ideal: 1080, max: 2160 },
-          frameRate: { ideal: 60, max: 60 },
+          width: { ideal: requestedQuality.width, max: 3840 },
+          height: { ideal: requestedQuality.height, max: 2160 },
+          frameRate: {
+            ideal: requestedQuality.frameRate,
+            max: requestedQuality.frameRate,
+          },
         } as MediaTrackConstraints,
-        audio: useNativeProcessAudio
-          ? false
-          : ({
-              channelCount: 2,
-              echoCancellation: false,
-              noiseSuppression: false,
-              autoGainControl: false,
-            } as MediaTrackConstraints),
+        audio: captureAudio
+          ? useNativeProcessAudio
+            ? false
+            : ({
+                channelCount: 2,
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false,
+              } as MediaTrackConstraints)
+          : false,
       });
       const videoTrack = displayStream.getVideoTracks()[0];
       if (!videoTrack) throw new Error("Nenhuma fonte de vídeo selecionada");
+      videoTrack.contentHint = "detail";
 
       let stream = displayStream;
       if (useNativeProcessAudio && selectedSource?.processId && nativeCapture) {
@@ -667,24 +804,33 @@ export function RoomApp({
     setSharing(false);
     setStatus("Transmissão encerrada");
   }
-  async function setVideoQuality(preset: "1080p" | "720p" | "480p") {
+  async function setVideoQuality(preset: QualityPreset) {
     setQualityPreset(preset);
-    const heights = { "1080p": 1080, "720p": 720, "480p": 480 } as const;
+    const requestedQuality = VIDEO_QUALITY_PRESETS[preset];
     const track = streamRef.current?.getVideoTracks()[0];
     if (track) {
       try {
         await track.applyConstraints({
-          width: {
-            ideal: preset === "1080p" ? 1920 : preset === "720p" ? 1280 : 854,
+          width: { ideal: requestedQuality.width },
+          height: { ideal: requestedQuality.height },
+          frameRate: {
+            ideal: requestedQuality.frameRate,
+            max: requestedQuality.frameRate,
           },
-          height: { ideal: heights[preset] },
-          frameRate: { ideal: 60, max: 60 },
         });
+        track.contentHint = "detail";
+        const settings = track.getSettings();
+        setQuality(
+          `${settings.width || requestedQuality.width}×${settings.height || requestedQuality.height} · ${settings.frameRate ? Math.round(settings.frameRate) : requestedQuality.frameRate} FPS efetivo`,
+        );
+        return;
       } catch {
         setStatus("Qualidade não suportada — usando fallback");
       }
     }
-    setQuality(`${preset} · 60 FPS preferido`);
+    setQuality(
+      `${preset} · ${requestedQuality.width}×${requestedQuality.height} solicitado`,
+    );
   }
   async function toggleFullscreen() {
     const nextFullscreen = !mediaFullscreen;
@@ -743,18 +889,133 @@ export function RoomApp({
     }
   }
   async function copyInvite() {
-    await navigator.clipboard?.writeText(
-      inviteUrl || `${window.location.origin}/s/${channel.slug}`,
-    );
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1400);
+    try {
+      let url = inviteUrl || `${window.location.origin}/s/${channel.slug}`;
+      if (!viewer) {
+        const payload = await roomApi<{ invite: { url: string } }>(`/api/rooms/${roomId}/invites`, { method: "POST" });
+        url = payload.invite.url;
+      }
+      await navigator.clipboard?.writeText(url);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Não foi possível criar o convite");
+    }
+  }
+  async function loadRoomAccess() {
+    if (viewer) return;
+    setAccessLoading(true);
+    setAccessError("");
+    try {
+      const [memberPayload, invitePayload] = await Promise.all([
+        roomApi<{ members: RoomMember[] }>(`/api/rooms/${roomId}/members`),
+        roomApi<{ invites: RoomInvite[] }>(`/api/rooms/${roomId}/invites`),
+      ]);
+      setMembers(memberPayload.members);
+      setInvites(invitePayload.invites);
+    } catch (error) {
+      setAccessError(error instanceof Error ? error.message : "Não foi possível carregar os acessos");
+    } finally {
+      setAccessLoading(false);
+    }
+  }
+  async function addMember(selectedTag = memberTag.trim()) {
+    if (!selectedTag) return;
+    setAccessLoading(true);
+    setAccessError("");
+    try {
+      await roomApi(`/api/rooms/${roomId}/members`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayTag: selectedTag }),
+      });
+      setMemberTag("");
+      setUserSuggestions([]);
+      await loadRoomAccess();
+    } catch (error) {
+      setAccessError(error instanceof Error ? error.message : "Não foi possível adicionar o membro");
+      setAccessLoading(false);
+    }
+  }
+  async function removeMember(userId: string) {
+    setAccessLoading(true);
+    try {
+      await roomApi(`/api/rooms/${roomId}/members`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
+      await loadRoomAccess();
+    } catch (error) {
+      setAccessError(error instanceof Error ? error.message : "Não foi possível remover o membro");
+      setAccessLoading(false);
+    }
+  }
+  async function revokeInvite(inviteId: string) {
+    setAccessLoading(true);
+    try {
+      await roomApi(`/api/rooms/${roomId}/invites`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inviteId }),
+      });
+      await loadRoomAccess();
+    } catch (error) {
+      setAccessError(error instanceof Error ? error.message : "Não foi possível revogar o convite");
+      setAccessLoading(false);
+    }
+  }
+  function openChannelSettings() {
+    setChannelDraft(channel);
+    setChannelError("");
+    setChannelSettingsOpen(true);
+    void loadRoomAccess();
+  }
+  function toggleMuted() {
+    const nextMuted = !muted;
+    setMuted(nextMuted);
+    if (remoteVideo.current) remoteVideo.current.muted = nextMuted;
+  }
+  function changeVolume(nextVolume: number) {
+    setVolume(nextVolume);
+    if (remoteVideo.current) remoteVideo.current.volume = nextVolume;
+  }
+  function changeCaptureAudio(enabled: boolean) {
+    setCaptureAudio(enabled);
+    const audioTracks = streamRef.current?.getAudioTracks() ?? [];
+    audioTracks.forEach((track) => {
+      track.enabled = enabled;
+    });
+    if (audioTracks.length > 0) {
+      setStatus(
+        enabled
+          ? "Áudio da transmissão ativado"
+          : "Áudio da transmissão desativado",
+      );
+    } else if (enabled && sharing) {
+      setStatus("O áudio será ativado ao escolher novamente a fonte");
+    }
+  }
+  async function leaveRoom() {
+    for (const connection of connections.current.values()) connection.close();
+    connections.current.clear();
+    pendingIce.current.clear();
+    if (remoteVideo.current) remoteVideo.current.srcObject = null;
+    await roomApi("/api/room/leave", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ peerId }),
+    }).catch(() => undefined);
+    setJoined(false);
+    setRoomLive(false);
+    setPlaybackBlocked(false);
+    setStatus("Você saiu da sala");
   }
   async function saveChannel() {
     setChannelSaving(true);
     setChannelError("");
     try {
-      const payload = await api<ChannelPayload>(
-        normalizedApiBaseUrl,
+      const payload = await roomApi<ChannelPayload>(
         "/api/room/channel",
         {
           method: "PATCH",
@@ -798,11 +1059,35 @@ export function RoomApp({
   }
   function uploadAvatar(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
-    if (!file || file.size > 2_000_000) return;
+    if (!file) return;
+    if (file.size > 700_000) {
+      setProfileError("Escolha uma imagem de até 700 KB");
+      return;
+    }
+    setProfileError("");
     const reader = new FileReader();
     reader.onload = () =>
       setDraft((p) => ({ ...p, avatar: String(reader.result) }));
     reader.readAsDataURL(file);
+  }
+  async function saveProfile() {
+    setProfileSaving(true);
+    setProfileError("");
+    try {
+      const payload = await roomApi<{ user: { displayName: string; displayTag: string; avatarUrl: string | null } }>("/api/me", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayName: draft.name, avatarUrl: draft.avatar }),
+      });
+      setProfile({ name: payload.user.displayName, avatar: payload.user.avatarUrl || profile.avatar });
+      setDraft({ name: payload.user.displayName, avatar: payload.user.avatarUrl || profile.avatar });
+      setDisplayTag(payload.user.displayTag);
+      setProfileSettingsOpen(false);
+    } catch (error) {
+      setProfileError(error instanceof Error ? error.message : "Não foi possível salvar o perfil");
+    } finally {
+      setProfileSaving(false);
+    }
   }
 
   const visibleNativeSources = nativeSources.filter((source) => {
@@ -820,65 +1105,23 @@ export function RoomApp({
     nativeCapture && sourceKind !== "tab",
   );
 
-  if (viewer && !joined)
-    return (
-      <main className="grid min-h-dvh place-items-center bg-background p-6 text-foreground">
-        <section className="w-full max-w-md border border-border bg-card p-8">
-          <div className="welcome-channel-badge">
-            {channel.avatar ? (
-              <img src={channel.avatar} alt="" />
-            ) : (
-              <Radio size={22} />
-            )}
-          </div>
-          <p className="font-mono text-xs uppercase tracking-[0.24em] text-muted-foreground">
-            {channel.category} · sala permanente
-          </p>
-          <h1 className="mt-5 text-4xl font-semibold tracking-tight">
-            {channel.name}
-          </h1>
-          <p className="mt-4 leading-7 text-muted-foreground">
-            {channel.description}. Entre uma vez e salve esta sala nos
-            favoritos.
-          </p>
-          <ProfileEditor
-            profile={draft}
-            setProfile={setDraft}
-            uploadAvatar={uploadAvatar}
-          />
-          <button
-            onClick={() => {
-              setProfile(draft);
-              setJoined(true);
-            }}
-            className="mt-6 min-h-11 w-full bg-foreground px-4 py-3 font-semibold text-background"
-          >
-            Entrar para assistir
-          </button>
-        </section>
-      </main>
-    );
-
   return (
-    <main className="persistent-room-shell flex min-h-dvh flex-col bg-background text-foreground">
+    <main className="room-app-frame">
       {!viewer && sourcePickerOpen && !sharing && (
-        <div
-          className="fixed inset-0 z-[70] grid place-items-center overflow-y-auto bg-[#0b0b0b]/90 p-4 backdrop-blur-md sm:p-6"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget)
-              setSourcePickerOpen(false);
-          }}
+        <RoomDialog
+          open={sourcePickerOpen && !sharing}
+          onOpenChange={(open) => setSourcePickerOpen(open)}
+          className="source-picker-dialog"
+          label="Escolher o que transmitir"
         >
           <section
-            className="my-auto w-full max-w-[680px] overflow-hidden rounded-2xl border border-white/10 bg-[#0b0b0b] shadow-[0_32px_100px_#000c]"
-            role="dialog"
-            aria-modal="true"
+            className="w-full overflow-hidden"
             aria-labelledby="source-picker-title"
             aria-describedby="source-picker-description"
           >
             <header className="flex items-start justify-between gap-6 border-b border-white/8 px-5 py-6 sm:px-8 sm:py-7">
               <div className="min-w-0">
-                <p className="font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-[#c8c9ff]">
+                <p className="font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-foreground">
                   ODYSSEY · Captura desktop
                 </p>
                 <h2
@@ -889,7 +1132,7 @@ export function RoomApp({
                 </h2>
                 <p
                   id="source-picker-description"
-                  className="mt-2 max-w-[540px] text-sm leading-6 text-[#aaa8af] sm:text-[15px]"
+                  className="mt-2 max-w-[540px] text-sm leading-6 text-muted-foreground sm:text-[15px]"
                 >
                   {nativeCapture
                     ? `Fontes reais detectadas no ${nativeCapture.platformLabel}.`
@@ -898,7 +1141,7 @@ export function RoomApp({
               </div>
               <button
                 type="button"
-                className="grid size-11 shrink-0 place-items-center rounded-lg border border-white/10 bg-[#0b0b0b] text-[#b9b7bd] transition-colors hover:border-white/20 hover:bg-[#29292b] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                className="grid size-11 shrink-0 place-items-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:border-white/20 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() => setSourcePickerOpen(false)}
                 aria-label="Fechar seletor de fonte"
               >
@@ -907,11 +1150,11 @@ export function RoomApp({
             </header>
 
             <div className="space-y-6 px-5 py-6 sm:px-8 sm:py-7">
-              <label className="flex min-h-12 items-center gap-3 rounded-xl border border-white/12 bg-[#0b0b0b] px-4 text-[#8f8d94] transition-colors focus-within:border-white/35 focus-within:ring-2 focus-within:ring-white/10">
+              <label className="flex min-h-12 items-center gap-3 rounded-xl border border-border bg-background px-4 text-muted-foreground transition-colors focus-within:border-white/35 focus-within:ring-2 focus-within:ring-white/10">
                 <Search className="shrink-0" size={18} />
                 <input
                   autoFocus
-                  className="min-w-0 flex-1 bg-transparent py-3 text-sm text-white outline-none placeholder:text-[#74727a]"
+                  className="min-w-0 flex-1 bg-transparent py-3 text-sm text-foreground outline-none placeholder:text-muted-foreground/60"
                   value={sourceSearch}
                   onChange={(event) => setSourceSearch(event.target.value)}
                   placeholder="Buscar janela ou aplicativo"
@@ -936,7 +1179,7 @@ export function RoomApp({
                     key={kind}
                     role="tab"
                     aria-selected={sourceKind === kind}
-                    className={`${sourceTabButtonClass} ${sourceKind === kind ? "bg-[#353537] text-white" : "bg-transparent text-[#aaa8af] hover:bg-[#29292b] hover:text-white"}`}
+                    className={`${sourceTabButtonClass} ${sourceKind === kind ? "bg-[var(--sg-surface-active)] text-foreground" : "bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground"}`}
                     onClick={() => {
                       setSourceKind(kind);
                       setSelectedSourceId(
@@ -953,13 +1196,13 @@ export function RoomApp({
 
               <div className="max-h-[min(34dvh,320px)] space-y-3 overflow-y-auto pr-1">
                 {sourcesLoading && (
-                  <p className="rounded-xl border border-dashed border-white/15 bg-[#0b0b0b] p-5 text-center text-sm text-[#aaa8af]">
+                  <p className="rounded-xl border border-dashed border-border bg-background p-5 text-center text-sm text-muted-foreground">
                     Lendo fontes do Windows…
                   </p>
                 )}
                 {sourceError && (
                   <p
-                    className="rounded-xl border border-[#8a444b] bg-[#2a1518] p-4 text-sm leading-6 text-[#ffadb3]"
+                    className="rounded-xl border border-destructive/50 bg-[var(--sg-danger-soft)] p-4 text-sm leading-6 text-foreground"
                     role="alert"
                   >
                     {sourceError}
@@ -972,10 +1215,10 @@ export function RoomApp({
                     <button
                       type="button"
                       key={source.id}
-                      className={`${sourceCardButtonClass} ${selectedSourceId === source.id ? "border-white/35 bg-[#29292b]" : "border-white/10 bg-[#0b0b0b] hover:border-white/20 hover:bg-[#121212]"}`}
+                      className={`${sourceCardButtonClass} ${selectedSourceId === source.id ? "border-white/35 bg-muted" : "border-border bg-background hover:border-white/20 hover:bg-muted/40"}`}
                       onClick={() => setSelectedSourceId(source.id)}
                     >
-                      <span className="grid size-12 shrink-0 place-items-center rounded-lg border border-white/8 bg-[#1b1b1b] text-white">
+                      <span className="grid size-12 shrink-0 place-items-center rounded-lg border border-border bg-background text-foreground">
                         {source.kind === "screen" ? (
                           <Monitor size={22} />
                         ) : (
@@ -986,7 +1229,7 @@ export function RoomApp({
                         <strong className="truncate text-sm font-bold text-white">
                           {source.name}
                         </strong>
-                        <small className="truncate text-xs leading-5 text-[#97959d]">
+                        <small className="truncate text-xs leading-5 text-muted-foreground">
                           {source.processName ? `${source.processName} · ` : ""}
                           {source.width}×{source.height}
                           {source.audioCapable ? " · áudio isolado" : ""}
@@ -994,7 +1237,7 @@ export function RoomApp({
                       </span>
                       {selectedSourceId === source.id && (
                         <CheckCircle2
-                          className="shrink-0 text-[#6ee7a0]"
+                          className="shrink-0 text-[var(--sg-success)]"
                           size={20}
                         />
                       )}
@@ -1005,17 +1248,17 @@ export function RoomApp({
                   !sourcesLoading &&
                   !visibleNativeSources.length &&
                   !sourceError && (
-                    <p className="rounded-xl border border-dashed border-white/15 bg-[#0b0b0b] p-5 text-center text-sm text-[#aaa8af]">
+                    <p className="rounded-xl border border-dashed border-border bg-background p-5 text-center text-sm text-muted-foreground">
                       Nenhuma fonte correspondente foi encontrada.
                     </p>
                   )}
                 {(!nativeCapture || sourceKind === "tab") && (
                   <button
                     type="button"
-                    className={`${sourceCardButtonClass} border-[#1b1b1b] bg-[#0b0b0b]`}
+                    className={`${sourceCardButtonClass} border-border bg-background`}
                     onClick={() => setSelectedSourceId(null)}
                   >
-                    <span className="grid size-12 shrink-0 place-items-center rounded-lg border border-transparent bg-[#0b0b0b] text-white">
+                    <span className="grid size-12 shrink-0 place-items-center rounded-lg border border-transparent bg-background text-foreground">
                       <MonitorUp size={22} />
                     </span>
                     <span className="flex min-w-0 flex-1 flex-col gap-1">
@@ -1026,21 +1269,21 @@ export function RoomApp({
                             ? "Uma janela do aplicativo"
                             : "Uma aba do navegador"}
                       </strong>
-                      <small className="truncate text-xs leading-5 text-[#aaa8af]">
+                      <small className="truncate text-xs leading-5 text-muted-foreground">
                         {sourceKind === "tab" && nativeCapture
                           ? "A aba será escolhida no seletor seguro do WebView2"
                           : "Captura de vídeo em alta qualidade"}
                       </small>
                     </span>
                     <CheckCircle2
-                      className="shrink-0 text-[#6ee7a0]"
+                      className="shrink-0 text-[var(--sg-success)]"
                       size={20}
                     />
                   </button>
                 )}
               </div>
 
-              <aside className="flex gap-3 rounded-xl border border-white/10 bg-[#0b0b0b] p-4 sm:p-5">
+              <aside className="flex gap-3 rounded-xl border border-border bg-background p-4 sm:p-5">
                 <Volume2 className="mt-0.5 shrink-0 text-white" size={20} />
                 <div className="min-w-0">
                   <strong className="block text-sm font-bold text-white">
@@ -1048,7 +1291,7 @@ export function RoomApp({
                       ? "Áudio isolado por aplicativo"
                       : "Áudio obrigatório"}
                   </strong>
-                  <p className="mt-1.5 text-xs leading-5 text-[#aaa8af]">
+                  <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
                     {sourceKind === "window" && nativeCapture
                       ? "O Windows 11 captura somente o processo escolhido e não recaptura o Screen Gole."
                       : "No seletor do Windows, habilite o compartilhamento de áudio; sem uma faixa audível a transmissão não começa."}
@@ -1058,7 +1301,7 @@ export function RoomApp({
 
               <button
                 type="button"
-                className="flex min-h-12 w-full items-center justify-center rounded-xl bg-white px-5 text-sm  text-[#0b0b0b] transition-colors hover:bg-[#dedede] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-[#1b1b1b] disabled:pointer-events-none disabled:opacity-40"
+                className="flex min-h-12 w-full items-center justify-center rounded-xl bg-foreground px-5 text-sm font-semibold text-background transition-colors hover:bg-foreground/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-40"
                 disabled={
                   sourcesLoading ||
                   (nativeSelectionRequired && !selectedSourceId)
@@ -1069,249 +1312,158 @@ export function RoomApp({
               </button>
             </div>
           </section>
-        </div>
+        </RoomDialog>
       )}
-      <ChannelSidebar
-        channel={channel}
-        viewer={viewer}
-        sharing={viewer ? roomLive : sharing}
-        viewers={viewers}
-        copied={copied}
-        onCopyInvite={() => void copyInvite()}
-        onEdit={() => {
-          setChannelDraft(channel);
-          setChannelError("");
-          setChannelSettingsOpen(true);
-        }}
-      />
-      <header className="room-topbar">
-        <div className="room-brand">
-          <div className="grid size-15 shrink-0 place-items-center overflow-hidden rounded-md border border-white/10  ">
-            <img
-              src="/odyssey-helmet.png"
-              alt="Símbolo da Odyssey Studio"
-              className="h-full w-full object-contain"
+      <div className="room-desktop-shell">
+        <CommunityRail
+          channel={channel}
+          viewer={viewer}
+          profile={profile}
+          onEdit={openChannelSettings}
+        />
+        <ChannelPanel
+          channel={channel}
+          viewer={viewer}
+          sharing={viewer ? roomLive : sharing}
+          viewers={viewers}
+          copied={copied}
+          onCopyInvite={() => void copyInvite()}
+          onEdit={openChannelSettings}
+        />
+        <section className="room-workspace">
+          <WorkspaceHeader
+            channel={channel}
+            status={status}
+            viewer={viewer}
+            copied={copied}
+            profile={profile}
+            onCopyInvite={() => void copyInvite()}
+            onEdit={openChannelSettings}
+            onProfile={() => {
+              setDraft(profile);
+              setProfileError("");
+              setProfileSettingsOpen(true);
+            }}
+            onFriends={() => setFriendsOpen(true)}
+            incomingFriendRequests={incomingFriendRequests}
+          />
+      <div className="workspace-content">
+        <section className="workspace-stage-section">
+          <div className="stage-card">
+            <BroadcastStage
+              viewer={viewer}
+              joined={joined}
+              sharing={sharing}
+              status={status}
+              quality={quality}
+              muted={muted}
+              playbackBlocked={viewer && playbackBlocked}
+              mediaFullscreen={mediaFullscreen}
+              videoRef={viewer ? remoteVideo : localVideo}
+              stageRef={screenPreview}
+              onJoin={() => setViewerProfileOpen(true)}
+              onStartShare={() => setSourcePickerOpen(true)}
+              onEnablePlayback={() => void enablePlayback()}
+              onToggleFullscreen={() => void toggleFullscreen()}
+              onLoadedMetadata={updatePlayback}
             />
           </div>
-          <div>
-            <p className="font-mono text-xs uppercase tracking-[0.22em] text-muted-foreground">
-              ODYSSEY Studio
-            </p>
-            <h1 className="font-semibold">{channel.name}</h1>
-          </div>
-        </div>
-        <div className="room-topbar-actions">
-          <span className="room-connection-status">
-            <Wifi size={16} />
-            {status}
-          </span>
-          <button
-            onClick={copyInvite}
-            className="flex min-h-11 items-center gap-2 border border-border px-4 hover:bg-muted"
-          >
-            {copied ? "Link copiado" : "Copiar convite"}
-            <Copy size={16} />
-          </button>
-        </div>
-      </header>
-      <div className="flex w-full flex-1 p-3 sm:p-4 lg:p-5">
-        <section className="flex min-w-0 w-full">
-          <div className="flex min-h-0 w-full flex-col rounded-lg bg-[#1b1b1b] p-2 pb-0 shadow-[0_24px_70px_#0005]">
-            <div
-              ref={screenPreview}
-              className={`relative h-[calc(100dvh-188px)] min-h-[360px] w-full flex-1 overflow-hidden bg-[#0b0b0b] [&:fullscreen]:fixed [&:fullscreen]:inset-0 [&:fullscreen]:z-[100] [&:fullscreen]:h-dvh [&:fullscreen]:w-screen [&:fullscreen]:rounded-none [&:fullscreen]:border-0 [&:fullscreen]:bg-[#050506] ${mediaFullscreen ? "fixed inset-0 z-[100] h-dvh w-screen rounded-none border-0 bg-[#050506]" : "rounded-[7px]"}`}
-            >
-              <video
-                ref={viewer ? remoteVideo : localVideo}
-                autoPlay
-                muted={viewer ? muted : true}
-                playsInline
-                className="h-full w-full object-contain"
-                aria-label={
-                  viewer ? "Transmissão da tela do host" : "Prévia da sua tela"
-                }
-                onLoadedMetadata={(event) =>
-                  updatePlayback(event.currentTarget)
-                }
-              />
-              {!sharing && !viewer && (
-                <div className="absolute inset-0 grid place-items-center text-center">
-                  <div>
-                    <ThinkingOrb
-                      state="composing"
-                      size={64}
-                      theme="dark"
-                      className="mx-auto mb-4"
-                      aria-label="Pronto para transmitir"
-                    />
-                    <p className="font-mono text-sm uppercase tracking-widest text-muted-foreground">
-                      {status}
-                    </p>
-                  </div>
-                </div>
-              )}
-              {viewer && status !== "Ao vivo" && (
-                <div className="absolute inset-0 grid place-items-center bg-card text-center">
-                  <div>
-                    <Signal size={32} className="mx-auto mb-4" />
-                    <p className="font-mono text-sm uppercase tracking-widest text-muted-foreground">
-                      {status}
-                    </p>
-                  </div>
-                </div>
-              )}
-              {viewer && playbackBlocked && (
-                <div className="playback-consent">
-                  <Volume2 size={22} />
-                  <strong>Ativar o áudio da transmissão</strong>
-                  <small>
-                    O Windows/WebView2 precisa de um clique para liberar o som.
-                  </small>
-                  <button type="button" onClick={() => void enablePlayback()}>
-                    Ativar áudio
-                  </button>
-                </div>
-              )}
-              <div className="absolute left-4 top-4 flex items-center gap-2 bg-background/90 px-3 py-2 font-mono text-xs">
-                <Signal size={14} />
-                {quality}
-              </div>
-              {mediaFullscreen && (
-                <button
-                  type="button"
-                  className="absolute top-4 right-4 z-[110] flex min-h-10 items-center gap-2 rounded-md border border-[#5a5663] bg-[#111014e8] px-3 text-[11px] font-bold text-[#f4f3f6] backdrop-blur-md transition-colors hover:bg-[#29272f] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[#8e91ff]"
-                  onClick={() => void toggleFullscreen()}
-                  aria-label="Sair da tela cheia"
-                  title="Sair da tela cheia (Esc)"
-                >
-                  <X size={20} />
-                  <span className="max-[480px]:hidden">Sair da tela cheia</span>
-                </button>
-              )}
-            </div>
-            <footer className="-mx-2 flex min-h-[76px] items-center rounded-b-lg bg-[#1b1b1b] px-4 py-2.5">
-              <div
-                className="flex w-full flex-wrap items-center gap-2.5"
-                role="group"
-                aria-label="Controles da transmissão"
-              >
-                <button
-                  type="button"
-                  className={footerIconButtonClass}
-                  onClick={() => {
-                    setMuted((value) => !value);
-                    if (remoteVideo.current) remoteVideo.current.muted = !muted;
-                  }}
-                  aria-label={muted ? "Ativar som" : "Mutar som"}
-                  title={muted ? "Ativar som" : "Mutar som"}
-                >
-                  {muted ? <VolumeX size={17} /> : <Volume2 size={17} />}
-                </button>
-                <label className="flex w-[92px] items-center max-[1100px]:w-[70px] max-[560px]:w-[58px]">
-                  <span className="sr-only">Volume</span>
-                  <input
-                    className="w-full accent-[#f3f2f5]"
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    value={volume}
-                    onChange={(event) => {
-                      const next = Number(event.target.value);
-                      setVolume(next);
-                      if (remoteVideo.current)
-                        remoteVideo.current.volume = next;
-                    }}
-                  />
-                </label>
-                <button
-                  type="button"
-                  className={footerIconButtonClass}
-                  onClick={toggleFullscreen}
-                  aria-label="Tela cheia"
-                  title="Tela cheia"
-                >
-                  <Expand size={17} />
-                </button>
-                <label className="relative flex items-center gap-2 text-xs font-semibold text-[#dedce2] whitespace-nowrap">
-                  <span>Áudio</span>
-                  <select
-                    className={footerSelectClass}
-                    aria-label="Saída de áudio"
-                    value={audioOutput}
-                    onChange={(event) =>
-                      void changeAudioOutput(event.target.value)
-                    }
-                  >
-                    <option value="default">Padrão</option>
-                    {audioOutputs
-                      .filter((device) => device.deviceId !== "default")
-                      .map((device) => (
-                        <option key={device.deviceId} value={device.deviceId}>
-                          {device.label ||
-                            `Dispositivo ${device.deviceId.slice(0, 4)}`}
-                        </option>
-                      ))}
-                  </select>
-                  <ChevronDown
-                    aria-hidden="true"
-                    className="pointer-events-none absolute right-3 text-white"
-                    size={16}
-                    strokeWidth={2.5}
-                  />
-                </label>
-                {!viewer && (
-                  <button
-                    type="button"
-                    className={`${footerShareButtonClass} ml-auto ${sharing ? "border-[#d85d67] bg-[#52272c] text-[#ffb2b8] hover:bg-[#6a2d34] hover:text-white" : "bg-[#323234] text-white hover:bg-[#5a595c]"}`}
-                    onClick={() => {
-                      if (sharing) {
-                        stopShare();
-                        return;
-                      }
-                      setSourcePickerOpen(true);
-                    }}
-                    aria-label={
-                      sharing ? "Encerrar transmissão" : "Compartilhar tela"
-                    }
-                    title={
-                      sharing ? "Encerrar transmissão" : "Compartilhar tela"
-                    }
-                  >
-                    <MonitorUp size={17} />
-                    <span>
-                      {sharing ? "Encerrar transmissão" : "Compartilhar tela"}
-                    </span>
-                  </button>
-                )}
-                <div
-                  className={`flex items-center gap-1.5 text-xs font-semibold text-[#dedce2] ${viewer ? "ml-auto" : "ml-0"}`}
-                  role="group"
-                  aria-label="Qualidade da transmissão"
-                >
-                  <span>Qualidade</span>
-                  {(["1080p", "720p", "480p"] as const).map((preset) => (
-                    <button
-                      type="button"
-                      key={preset}
-                      className={`${footerQualityButtonClass} ${qualityPreset === preset ? "border-transparent bg-[#5a595c] text-white" : "border-transparent bg-[#323234] text-[#f3f2f5] hover:border-transparent hover:bg-[#5a595c] hover:text-white"}`}
-                      onClick={() => void setVideoQuality(preset)}
-                    >
-                      {preset}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </footer>
-          </div>
+        </section>
+        <ParticipantStrip
+          viewer={viewer}
+          sharing={viewer ? roomLive : sharing}
+          profile={profile}
+          viewers={viewers}
+          onInvite={() => void copyInvite()}
+        />
+        {(joined || !viewer) ? (
+          <ControlDock
+            viewer={viewer}
+            sharing={sharing}
+            muted={muted}
+            onToggleMuted={toggleMuted}
+            onToggleFullscreen={() => void toggleFullscreen()}
+            onToggleShare={() => {
+              if (sharing) stopShare();
+              else setSourcePickerOpen(true);
+            }}
+            onLeave={() => void leaveRoom()}
+            onOpenSettings={() => setStreamSettingsOpen(true)}
+          />
+        ) : null}
+      </div>
         </section>
       </div>
+      <ViewerJoinDialog
+        open={viewerProfileOpen}
+        channel={channel}
+        profile={draft}
+        onOpenChange={setViewerProfileOpen}
+        onProfileChange={setDraft}
+        onAvatarChange={uploadAvatar}
+        onSubmit={() => {
+          setProfile(draft);
+          setJoined(true);
+          setViewerProfileOpen(false);
+          setStatus("Entrando na sala");
+        }}
+      />
+      <StreamSettingsDialog
+        open={streamSettingsOpen}
+        viewer={viewer}
+        sharing={sharing}
+        muted={muted}
+        volume={volume}
+        audioOutputs={audioOutputs}
+        audioOutput={audioOutput}
+        qualityPreset={qualityPreset}
+        qualityPresets={QUALITY_PRESETS}
+        captureAudio={captureAudio}
+        onOpenChange={setStreamSettingsOpen}
+        onToggleMuted={toggleMuted}
+        onVolumeChange={changeVolume}
+        onAudioOutputChange={(deviceId) => void changeAudioOutput(deviceId)}
+        onQualityChange={(preset) =>
+          void setVideoQuality(preset as QualityPreset)
+        }
+        onCaptureAudioChange={changeCaptureAudio}
+      />
+      <FriendsDialog
+        open={friendsOpen}
+        onOpenChange={setFriendsOpen}
+        request={roomApi}
+        onIncomingCountChange={setIncomingFriendRequests}
+        onJoinRoom={(room) => {
+          setFriendsOpen(false);
+          if (room.roomId !== roomId && !accessToken)
+            window.location.assign(`/s/${room.slug}`);
+        }}
+      />
+      {profileSettingsOpen && (
+        <RoomDialog open={profileSettingsOpen} onOpenChange={setProfileSettingsOpen} className="channel-settings-dialog" label="Editar perfil">
+          <form className="channel-settings-card" onSubmit={(event) => { event.preventDefault(); void saveProfile(); }}>
+            <div className="channel-settings-header"><div><p>Conta Google</p><h2>Editar perfil</h2></div><DialogCloseButton /></div>
+            <div className="flex items-center gap-4 rounded-xl bg-[#0b0b0b] p-4">
+              <span className="grid size-14 shrink-0 place-items-center overflow-hidden rounded-full bg-white/10 text-lg font-bold text-white">{draft.avatar ? <img src={draft.avatar} alt="Prévia da foto do perfil" className="size-full object-cover" /> : profile.name.slice(0, 1).toUpperCase()}</span>
+              <div className="min-w-0 flex-1"><strong className="block truncate text-sm text-white">{displayTag || profile.name}</strong><small className="text-xs text-white/45">O número da tag permanece o mesmo.</small></div>
+              <label className="cursor-pointer rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold text-white hover:bg-white/10">Trocar foto<input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" onChange={uploadAvatar} /></label>
+            </div>
+            <label>Nome público<input value={draft.name} minLength={2} maxLength={24} required onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label>
+            {profileError && <p className="channel-settings-error">{profileError}</p>}
+            <div className="channel-settings-actions">
+              {!accessToken && <a href="/logout" className="mr-auto self-center text-xs font-bold text-red-300">Sair da conta</a>}
+              <button type="button" onClick={() => setProfileSettingsOpen(false)}>Cancelar</button>
+              <button type="submit" disabled={profileSaving}>{profileSaving ? "Salvando…" : "Salvar perfil"}</button>
+            </div>
+          </form>
+        </RoomDialog>
+      )}
       {channelSettingsOpen && !viewer && (
-        <div
-          className="channel-settings-backdrop"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="channel-settings-title"
+        <RoomDialog
+          open={channelSettingsOpen}
+          onOpenChange={setChannelSettingsOpen}
+          className="channel-settings-dialog"
+          label="Personalizar canal"
         >
           <form
             className="channel-settings-card"
@@ -1325,13 +1477,7 @@ export function RoomApp({
                 <p>Configuração permanente</p>
                 <h2 id="channel-settings-title">Personalizar canal</h2>
               </div>
-              <button
-                type="button"
-                aria-label="Fechar"
-                onClick={() => setChannelSettingsOpen(false)}
-              >
-                <X size={19} />
-              </button>
+              <DialogCloseButton />
             </div>
             <div className="channel-avatar-editor">
               <div className="channel-avatar-preview">
@@ -1413,6 +1559,80 @@ export function RoomApp({
                 }
               />
             </label>
+            <section className="mt-3 space-y-5 border-t border-white/10 pt-6" aria-labelledby="room-access-title">
+              <div>
+                <p className="font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-white/45">Acesso permanente</p>
+                <h3 id="room-access-title" className="mt-2 text-lg font-bold text-white">Membros e convites</h3>
+                <p className="mt-1 text-xs leading-5 text-white/50">Adicione uma tag ou gere um link válido por sete dias.</p>
+              </div>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-4 top-3.5 text-white/35" size={17} aria-hidden="true" />
+                <input
+                  value={memberTag}
+                  onChange={(event) => {
+                    setMemberTag(event.target.value);
+                    setAccessError("");
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter") return;
+                    event.preventDefault();
+                    const firstMatch = userSuggestions[0]?.displayTag;
+                    void addMember(firstMatch || memberTag.trim());
+                  }}
+                  placeholder="Pesquisar por nome ou Nome#1234"
+                  aria-label="Pesquisar usuário para adicionar"
+                  aria-autocomplete="list"
+                  className="min-h-11 w-full rounded-xl border border-white/10 bg-[#0b0b0b] pl-11 pr-24 text-sm text-white outline-none placeholder:text-white/30 focus:border-white/30"
+                />
+                <span className="pointer-events-none absolute right-4 top-3.5 text-[10px] font-bold uppercase tracking-wider text-white/30">
+                  {userSearchLoading ? "Buscando…" : "Usuários"}
+                </span>
+                {memberTag.trim().length >= 2 && !userSearchLoading && (
+                  <div className="absolute inset-x-0 top-[calc(100%+.5rem)] z-20 overflow-hidden rounded-xl border border-white/10 bg-[#121212] p-1 shadow-2xl shadow-black/50" role="listbox">
+                    {userSuggestions.length ? userSuggestions.map((user) => (
+                      <button
+                        key={user.userId}
+                        type="button"
+                        role="option"
+                        aria-selected="false"
+                        disabled={accessLoading}
+                        onClick={() => void addMember(user.displayTag)}
+                        className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-white/10 focus-visible:bg-white/10 focus-visible:outline-none"
+                      >
+                        <span className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-full bg-white/10 text-xs font-bold text-white">
+                          {user.avatarUrl ? <img src={user.avatarUrl} alt="" className="size-full object-cover" /> : user.displayName.slice(0, 1).toUpperCase()}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <strong className="block truncate text-sm text-white">{user.displayName}</strong>
+                          <small className="block truncate text-xs text-white/45">{user.displayTag}</small>
+                        </span>
+                        <span className="text-xs font-bold text-white/70">Adicionar</span>
+                      </button>
+                    )) : (
+                      <p className="px-3 py-4 text-center text-xs text-white/45">Nenhum usuário disponível com esse nome.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className="space-y-2">
+                {members.map((member) => (
+                  <div key={member.userId} className="flex items-center gap-3 rounded-xl bg-[#0b0b0b] p-3">
+                    <span className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-full bg-white/10 text-xs font-bold text-white">{member.avatarUrl ? <img src={member.avatarUrl} alt="" className="size-full object-cover" /> : member.displayName.slice(0, 1).toUpperCase()}</span>
+                    <span className="min-w-0 flex-1"><strong className="block truncate text-sm text-white">{member.displayTag}</strong><small className="text-[10px] font-bold uppercase tracking-wider text-white/35">{member.role === "owner" ? "Proprietário" : "Membro"}</small></span>
+                    {member.role !== "owner" && <button type="button" disabled={accessLoading} onClick={() => void removeMember(member.userId)} className="rounded-lg px-3 py-2 text-xs font-bold text-red-300 hover:bg-red-500/10">Remover</button>}
+                  </div>
+                ))}
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <div><strong className="block text-sm text-white">Links de convite</strong><small className="text-xs text-white/40">{invites.filter((invite) => !invite.revokedAt && new Date(invite.expiresAt) > new Date()).length} ativo(s)</small></div>
+                <button type="button" disabled={accessLoading} onClick={() => void copyInvite().then(loadRoomAccess)} className="min-h-10 rounded-xl border border-white/10 bg-white/5 px-4 text-xs font-bold text-white hover:bg-white/10">Criar e copiar</button>
+              </div>
+              {invites.filter((invite) => !invite.revokedAt && new Date(invite.expiresAt) > new Date()).map((invite) => (
+                <div key={invite.id} className="flex items-center justify-between gap-3 rounded-xl bg-[#0b0b0b] px-4 py-3 text-xs text-white/55"><span>Expira em {new Date(invite.expiresAt).toLocaleDateString("pt-BR")}</span><button type="button" disabled={accessLoading} onClick={() => void revokeInvite(invite.id)} className="font-bold text-red-300">Revogar</button></div>
+              ))}
+              {accessLoading && <p className="text-xs text-white/40">Atualizando acessos…</p>}
+              {accessError && <p className="rounded-xl bg-red-500/10 px-4 py-3 text-xs leading-5 text-red-200" role="alert">{accessError}</p>}
+            </section>
             {channelError && (
               <p className="channel-settings-error">{channelError}</p>
             )}
@@ -1428,158 +1648,8 @@ export function RoomApp({
               </button>
             </div>
           </form>
-        </div>
+        </RoomDialog>
       )}
     </main>
-  );
-}
-
-function ChannelSidebar({
-  channel,
-  viewer,
-  sharing,
-  viewers,
-  copied,
-  onCopyInvite,
-  onEdit,
-}: {
-  channel: ChannelProfile;
-  viewer: boolean;
-  sharing: boolean;
-  viewers: { peerId: string; displayName: string }[];
-  copied: boolean;
-  onCopyInvite: () => void;
-  onEdit: () => void;
-}) {
-  return (
-    <aside
-      className="persistent-channel-sidebar"
-      aria-label="Canais da comunidade"
-    >
-      <div className="channel-community-header">
-        <div className="channel-community-avatar size-17">
-          {channel.avatar ? (
-            <img src={channel.avatar} alt="" />
-          ) : (
-            <Radio size={18} />
-          )}
-        </div>
-        <span>
-          <strong>{channel.name}</strong>
-          <small>Sala permanente</small>
-        </span>
-        <ChevronDown size={16} />
-      </div>
-      <nav className="channel-navigation">
-        <p className="channel-category">Comunidade</p>
-        <button type="button" className="channel-text-row">
-          <Hash size={18} />
-          <span>lobby</span>
-        </button>
-        <div className="channel-category-row">
-          <p className="channel-category">{channel.category}</p>
-          {!viewer && (
-            <button type="button" onClick={onEdit} aria-label="Editar canal">
-              <Settings2 size={14} />
-            </button>
-          )}
-        </div>
-        <div className="channel-live-block">
-          <div className="channel-live-row">
-            <Volume2 size={18} />
-            <span>
-              <strong>{channel.name}</strong>
-              <small>{channel.description}</small>
-            </span>
-            <b className={sharing ? "is-live" : ""}>
-              {sharing ? "AO VIVO" : "OFF"}
-            </b>
-          </div>
-          {viewers.map((item) => (
-            <div className="channel-member" key={item.peerId}>
-              <span>{item.displayName.slice(0, 1).toUpperCase()}</span>
-              <p>{item.displayName}</p>
-              <Signal size={12} />
-            </div>
-          ))}
-          {!viewers.length && (
-            <p className="channel-empty-members">Aguardando espectadores</p>
-          )}
-        </div>
-        <p className="channel-category channel-future-label">Próximas salas</p>
-        <div className="channel-future-row">
-          <VolumeX size={17} />
-          <span>Mesa 02</span>
-          <small>em breve</small>
-        </div>
-        <div className="channel-future-row">
-          <VolumeX size={17} />
-          <span>Mesa 03</span>
-          <small>em breve</small>
-        </div>
-      </nav>
-      <div className="channel-sidebar-footer">
-        <button type="button" onClick={onCopyInvite}>
-          <Copy size={16} />
-          {copied ? "Link copiado" : "Copiar acesso permanente"}
-        </button>
-        {!viewer && (
-          <button type="button" onClick={onEdit}>
-            <Settings2 size={16} />
-            Personalizar canal
-          </button>
-        )}
-      </div>
-    </aside>
-  );
-}
-
-function ProfileEditor({
-  profile,
-  setProfile,
-  uploadAvatar,
-}: {
-  profile: Profile;
-  setProfile: React.Dispatch<React.SetStateAction<Profile>>;
-  uploadAvatar: (event: React.ChangeEvent<HTMLInputElement>) => void;
-}) {
-  return (
-    <div className="mt-7 space-y-5">
-      <div className="flex items-center gap-4">
-        <div className="grid h-16 w-16 place-items-center overflow-hidden rounded-full border border-border bg-muted">
-          {profile.avatar ? (
-            <img
-              src={profile.avatar}
-              alt="Prévia do avatar"
-              className="h-full w-full object-cover"
-            />
-          ) : (
-            <Camera size={22} />
-          )}
-        </div>
-        <label className="cursor-pointer border border-border px-4 py-2 text-sm hover:bg-muted">
-          Adicionar imagem
-          <input
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            className="sr-only"
-            onChange={uploadAvatar}
-          />
-        </label>
-      </div>
-      <label className="block text-sm font-medium" htmlFor="profile-name">
-        Nome
-        <input
-          id="profile-name"
-          value={profile.name}
-          onChange={(event) =>
-            setProfile((p) => ({ ...p, name: event.target.value }))
-          }
-          maxLength={32}
-          className="mt-2 min-h-11 w-full border border-border bg-background px-4 outline-none focus:ring-2 focus:ring-foreground"
-          placeholder="Seu nome"
-        />
-      </label>
-    </div>
   );
 }

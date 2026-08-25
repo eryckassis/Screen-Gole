@@ -34,6 +34,39 @@ fn stop_process_audio_capture(
     windows_capture::stop_process_audio(state.inner())
 }
 
+#[cfg(windows)]
+fn credential_entry(key: &str) -> Result<keyring::Entry, String> {
+    if !matches!(key, "desktop-session" | "desktop-oauth-state") {
+        return Err("Identificador de credencial inválido".to_string());
+    }
+    keyring::Entry::new("com.screengole.desktop", key).map_err(|error| error.to_string())
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn store_secure_value(key: String, value: String) -> Result<(), String> {
+    credential_entry(&key)?.set_password(&value).map_err(|error| error.to_string())
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn load_secure_value(key: String) -> Result<Option<String>, String> {
+    match credential_entry(&key)?.get_password() {
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn delete_secure_value(key: String) -> Result<(), String> {
+    match credential_entry(&key)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default();
@@ -46,7 +79,10 @@ pub fn run() {
                 list_capture_sources,
                 start_process_audio_capture,
                 read_process_audio_chunk,
-                stop_process_audio_capture
+                stop_process_audio_capture,
+                store_secure_value,
+                load_secure_value,
+                delete_secure_value
             ]);
     }
 
@@ -62,6 +98,7 @@ pub fn run() {
     }
 
     builder
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
         .setup(|_app| {
             #[cfg(all(debug_assertions, windows))]

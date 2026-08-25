@@ -2,41 +2,124 @@
 @source "../components";
 @source "./";
 
+@font-face {
+  font-family: "Screen Gole Login";
+  src: url("/fonts/fontNice.woff2") format("woff2");
+  font-display: swap;
+}
+
+:root {
+  --font-login: "Screen Gole Login", "Manrope Variable", sans-serif;
+}
+
 .desktop-entry {
-  min-height: 100dvh;
+  min-width: 900px;
+  min-height: 640px;
   display: grid;
   place-items: center;
   padding: 32px;
-  color: #f3f2f5;
+  color: var(--sg-text);
   background:
-    radial-gradient(circle at 20% 0%, #353675 0, transparent 34%),
-    radial-gradient(circle at 90% 100%, #48244d 0, transparent 32%),
-    #111014;
+    linear-gradient(rgb(255 255 255 / 2%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 2%) 1px, transparent 1px),
+    var(--sg-canvas);
+  background-size: 40px 40px;
 }
 
 .desktop-entry-card {
-  width: min(680px, 100%);
+  width: min(720px, 100%);
   padding: 42px;
-  border: 1px solid #3b3943;
+  border: 1px solid var(--sg-border-strong);
   border-radius: 20px;
-  background: #1c1b21e8;
-  box-shadow: 0 32px 90px #0009;
+  background: var(--sg-surface);
+  box-shadow: var(--sg-shadow);
 }
 
-.desktop-entry-brand { display: flex; align-items: center; gap: 10px; font-weight: 800; }
-.desktop-entry-kicker { margin: 42px 0 10px; color: #9b9dfb; font: 700 11px/1.2 monospace; letter-spacing: .14em; text-transform: uppercase; }
-.desktop-entry h1 { margin: 0; font-size: clamp(32px, 5vw, 52px); letter-spacing: -.04em; }
-.desktop-entry-copy { max-width: 520px; margin: 14px 0 28px; color: #aaa6b2; font-size: 16px; line-height: 1.6; }
-.desktop-mode-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-.desktop-mode-grid button { display: flex; min-height: 112px; align-items: center; gap: 16px; padding: 20px; border: 1px solid #484650; border-radius: 12px; background: #27262d; text-align: left; }
-.desktop-mode-grid button:hover { border-color: #9b9dfb; background: #333247; color: #fff; }
-.desktop-mode-grid span { display: flex; flex-direction: column; gap: 5px; }
-.desktop-mode-grid strong { font-size: 17px; }
-.desktop-mode-grid small, .desktop-entry-footnote { color: #aaa6b2; }
-.desktop-entry-footnote { margin: 22px 0 0; font-size: 12px; }
+.desktop-entry-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 800;
+}
 
-@media (max-width: 600px) {
-  .desktop-entry { padding: 18px; }
-  .desktop-entry-card { padding: 28px; }
-  .desktop-mode-grid { grid-template-columns: 1fr; }
+.desktop-entry-brand img {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: var(--sg-text);
+  object-fit: cover;
+}
+
+.desktop-entry-kicker {
+  margin: 40px 0 9px;
+  color: var(--sg-text-muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.desktop-entry h1 {
+  margin: 0;
+  font-size: clamp(34px, 5vw, 52px);
+  letter-spacing: -0.055em;
+}
+
+.desktop-entry-copy {
+  max-width: 520px;
+  margin: 14px 0 28px;
+  color: var(--sg-text-muted);
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.desktop-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.desktop-mode-grid button {
+  display: flex;
+  min-height: 118px;
+  align-items: center;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid var(--sg-border);
+  border-radius: 14px;
+  background: var(--sg-surface-raised);
+  color: var(--sg-text);
+  text-align: left;
+  transition: background-color var(--sg-transition), border-color var(--sg-transition), transform var(--sg-transition);
+}
+
+.desktop-mode-grid button:hover {
+  border-color: var(--sg-border-strong);
+  background: var(--sg-surface-active);
+}
+
+.desktop-mode-grid button:active {
+  transform: scale(0.985);
+}
+
+.desktop-mode-grid span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.desktop-mode-grid strong {
+  font-size: 16px;
+}
+
+.desktop-mode-grid small,
+.desktop-entry-footnote {
+  color: var(--sg-text-muted);
+}
+
+.desktop-entry-footnote {
+  margin: 22px 0 0;
+  font-size: 11px;
 }

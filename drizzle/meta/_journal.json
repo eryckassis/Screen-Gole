@@ -15,6 +15,20 @@
       "when": 1787521868676,
       "tag": "0001_high_dakota_north",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787616187345,
+      "tag": "0002_sudden_edwin_jarvis",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787620175930,
+      "tag": "0003_violet_ego",
+      "breakpoints": true
     }
   ]
 }

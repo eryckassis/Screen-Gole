@@ -1,6 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { DesktopApp } from './desktop-app'
+import '@fontsource-variable/manrope'
 import './styles.css'
 
 const root = document.getElementById('root')
